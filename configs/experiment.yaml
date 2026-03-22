@@ -1,0 +1,49 @@
+dataset:
+  dataset_dir: "dataset/"           # Pre-built dataset root (read-only)
+  num_harmful: 200
+  num_benign: 200
+  harm_source: "HarmBench"
+  seed: 42
+  test_split: 0.2  # hold out 40 harmful + 40 benign for intervention eval
+
+generation:
+  temperature: 0.0
+  max_new_tokens: 512
+  batch_size: 8
+
+activations:
+  token_positions: ["last_instruction", "last_post_instruction", "last"]
+  # last_instruction = last token of user instruction (t_inst from Zhao et al.)
+  # last_post_instruction = last token of full formatted prompt (t_post_inst)
+  # last = last token position before generation
+  layers: "all"
+  dtype: "float32"
+  cache_dir: "data/activations/"
+
+probing:
+  probe_type: "logistic_regression"
+  regularization: "l2"
+  C_values: [0.01, 0.1, 1.0, 10.0]
+  cv_folds: 5
+  subspace_energy_threshold: 0.95  # for effective rank
+
+attribution_patching:
+  clean_language: "en"
+  components: ["residual", "attn_out", "mlp_out"]
+  metric: "refusal_direction_activation"
+  batch_size: 16
+  # For attention head-level tracing:
+  head_level: true
+
+sae:
+  top_k_features: 50  # top features by |delta_i|
+  clamping_validation_samples: 100
+
+interventions:
+  caa:
+    alpha_range: [0.5, 1.0, 1.5, 2.0, 2.5, 3.0]
+  sae_clamp:
+    top_features: [5, 10, 20, 50]
+  subspace_projection:
+    train_pairs_per_tier: 50
+    regularization: [0.001, 0.01, 0.1]
