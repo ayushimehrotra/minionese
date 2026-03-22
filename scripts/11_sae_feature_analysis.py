@@ -3,7 +3,6 @@
 Script 11: SAE Feature Analysis
 
 SAE decomposition, delta scoring, interpretation, causal validation.
-For Qwen, checks for trained SAEs and triggers training if not found.
 
 Usage:
     python scripts/11_sae_feature_analysis.py \
@@ -28,7 +27,6 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from src.sae.delta_scores import compute_delta_scores, rank_features, feature_analysis_table
 from src.sae.feature_extract import load_sae, encode_activations
 from src.sae.interpret import load_feature_labels
-from src.sae.train_sae import check_sae_availability, train_all_critical_layers
 from src.utils.config import load_config, load_yaml, get_model_config
 from src.utils.logging_setup import setup_logging
 from src.utils.reproducibility import setup_reproducibility
@@ -41,7 +39,6 @@ def parse_args():
                         help="Path to critical_layers.json.")
     parser.add_argument("--activations-dir", default="data/activations/")
     parser.add_argument("--output-dir", default="results/sae_features/")
-    parser.add_argument("--trained-saes-dir", default="trained_saes/")
     parser.add_argument("--perturbation", default="standard_translation")
     parser.add_argument("--token-position", default="last_post_instruction")
     parser.add_argument("--top-k", type=int, default=50)
@@ -69,20 +66,6 @@ def main():
 
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
-
-    # Check SAE availability; train if needed (Qwen)
-    avail = check_sae_availability(model_name)
-    if not avail["available"]:
-        logger.info(f"No pre-trained SAEs for {model_name}. Checking for custom-trained SAEs...")
-        from src.sae.train_sae import _model_short
-        model_short = _model_short(model_name)
-        missing_layers = [
-            l for l in critical_layers
-            if not (Path(args.trained_saes_dir) / model_short / f"layer_{l}" / "sae").exists()
-        ]
-        if missing_layers and not args.dry_run:
-            logger.info(f"Training SAEs for layers: {missing_layers}")
-            train_all_critical_layers(model_name, missing_layers, args.trained_saes_dir)
 
     if args.dry_run:
         logger.info("[DRY RUN] Would run SAE feature analysis.")
@@ -129,7 +112,7 @@ def main():
     # Load SAE
     logger.info(f"Loading SAE for layer {primary_layer}...")
     try:
-        sae = load_sae(model_name, primary_layer, args.trained_saes_dir)
+        sae = load_sae(model_name, primary_layer)
     except Exception as e:
         logger.error(f"Could not load SAE: {e}")
         sys.exit(1)

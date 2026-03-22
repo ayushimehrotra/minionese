@@ -24,16 +24,9 @@ target_models:
     num_layers: 28
     hidden_dim: 3584
     num_heads: 28
-    sae_suite: null  # NO public SAE suite available -- must train our own
-    sae_source: "saelens"  # train using SAELens, then load from disk
-    sae_pretrained: false   # triggers SAE training pipeline (see Module 15)
-    sae_train_config:
-      width_multiplier: 8       # SAE width = 8 * hidden_dim = 28672
-      k: 64                     # TopK sparsity
-      num_tokens: 500_000_000   # ~500M tokens from RedPajama or similar
-      batch_size: 4096
-      learning_rate: 3.0e-4
-      layers_to_train: "critical"  # only train at critical_layer_range to save compute
+    sae_suite: "andyrdt/saes-qwen2.5-7b-instruct"
+    sae_source: "saelens"
+    sae_pretrained: true
     critical_layer_range: [10, 20]
 
 judge_models:

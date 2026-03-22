@@ -5,8 +5,7 @@ Decompose activations into SAE features at critical layers.
 """
 
 import logging
-from pathlib import Path
-from typing import List, Optional
+from typing import List
 
 import torch
 
@@ -22,24 +21,20 @@ SAE_SUITE_IDS = {
         "primary": "google/gemma-scope-9b-it-res",
         "fallback": "google/gemma-scope-9b-pt-res",
     },
+    "qwen": {
+        "primary": "andyrdt/saes-qwen2.5-7b-instruct",
+        "fallback": None,
+    },
 }
 
 
-def load_sae(
-    model_name: str,
-    layer: int,
-    trained_saes_dir: str = "trained_saes/",
-):
+def load_sae(model_name: str, layer: int):
     """
-    Load the appropriate SAE for a given model and layer.
-
-    For models with pre-trained SAEs (Llama, Gemma), loads from HuggingFace.
-    For models without (Qwen), loads custom-trained SAE from disk.
+    Load the SAE for a given model and layer from HuggingFace.
 
     Args:
         model_name: HuggingFace model name.
         layer: Layer index.
-        trained_saes_dir: Base directory for custom-trained SAEs.
 
     Returns:
         SAELens SAE object.
@@ -53,46 +48,28 @@ def load_sae(
 
     avail = check_sae_availability(model_name)
     model_short = _model_short(model_name)
+    suite = avail["hf_repo"]
+    sae_id = _build_sae_id(model_short, layer)
 
-    if avail["available"]:
-        suite = avail["hf_repo"]
-        # Try to construct the correct sae_id for the suite
-        sae_id = _build_sae_id(model_short, layer)
-        try:
-            logger.info(f"Loading SAE from {suite}, sae_id={sae_id}, layer={layer}")
-            sae, cfg_dict, feature_sparsity = SAE.from_pretrained(
-                release=suite,
+    try:
+        logger.info(f"Loading SAE from {suite}, sae_id={sae_id}, layer={layer}")
+        sae, _, _ = SAE.from_pretrained(
+            release=suite,
+            sae_id=sae_id,
+            device="cuda" if torch.cuda.is_available() else "cpu",
+        )
+        return sae
+    except Exception as e:
+        fallback = avail.get("fallback")
+        if fallback:
+            logger.warning(f"Primary SAE suite failed ({e}), trying fallback: {fallback}")
+            sae, _, _ = SAE.from_pretrained(
+                release=fallback,
                 sae_id=sae_id,
                 device="cuda" if torch.cuda.is_available() else "cpu",
             )
             return sae
-        except Exception as e:
-            logger.warning(f"Could not load from primary suite ({suite}): {e}")
-            # Try fallback
-            fallback = avail.get("fallback")
-            if fallback:
-                try:
-                    logger.info(f"Trying fallback SAE suite: {fallback}")
-                    sae, _, _ = SAE.from_pretrained(
-                        release=fallback,
-                        sae_id=sae_id,
-                        device="cuda" if torch.cuda.is_available() else "cpu",
-                    )
-                    return sae
-                except Exception as e2:
-                    logger.error(f"Fallback SAE also failed: {e2}")
-            raise
-    else:
-        # Load custom-trained SAE from disk
-        sae_path = Path(trained_saes_dir) / model_short / f"layer_{layer}" / "sae"
-        if not sae_path.exists():
-            raise FileNotFoundError(
-                f"No custom SAE found at {sae_path}. "
-                "Run script 11 (SAE feature analysis) which calls train_sae first."
-            )
-        logger.info(f"Loading custom-trained SAE from {sae_path}")
-        sae = SAE.load_from_disk(str(sae_path))
-        return sae
+        raise
 
 
 def _build_sae_id(model_short: str, layer: int) -> str:

@@ -170,8 +170,7 @@ python scripts/11_sae_feature_analysis.py \
     --output-dir results/sae_features/
 ```
 
-SAE decomposition, delta scoring, Neuronpedia interpretation, and causal validation.
-For Qwen, automatically triggers SAE training (~60-80 GPU-hours) if no pre-trained SAEs exist. Generates Figures 9 and Table 4.
+SAE decomposition, delta scoring, Neuronpedia interpretation, and causal validation. Generates Figures 9 and Table 4.
 
 ### Step 12: Run Interventions
 
@@ -230,12 +229,10 @@ Tests that don't require GPU/model loading run independently. Tests requiring mo
 | Cross-lingual analysis | ~30 min | ~500 MB |
 | Attribution patching | ~6 hours | ~2 GB |
 | Head-level tracing | ~4 hours | ~1 GB |
-| SAE training (Qwen only) | ~60-80 hours | ~20 GB |
 | SAE analysis | ~3 hours | ~5 GB |
 | Interventions + sweep | ~8 hours | ~5 GB |
-| **Total (Llama/Gemma)** | **~47 hours** | **~67 GB** |
-| **Total (Qwen)** | **~107-127 hours** | **~87 GB** |
-| **Grand total (3 models)** | **~201-221 hours** | **~221 GB** |
+| **Total per model** | **~47 hours** | **~67 GB** |
+| **Grand total (3 models)** | **~141 hours** | **~201 GB** |
 
 ## SAE Availability
 
@@ -243,4 +240,4 @@ Tests that don't require GPU/model loading run independently. Tests requiring mo
 |-------|-----------|-------|
 | Llama-3.1-8B-Instruct | LlamaScope (fnlp/Llama-Scope-8B-Base-LXR-32x-TopK) | Pre-trained, all layers |
 | Gemma-2-9B-IT | GemmaScope (google/gemma-scope-9b-it-res) | Pre-trained, all layers |
-| Qwen2.5-7B-Instruct | None | Must train custom SAEs (~60-80 GPU-hours) |
+| Qwen2.5-7B-Instruct | andyrdt/saes-qwen2.5-7b-instruct | Pre-trained, all layers |
