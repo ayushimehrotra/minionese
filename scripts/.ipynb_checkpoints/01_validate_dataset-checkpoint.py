@@ -83,21 +83,7 @@ def main():
         for tier_name, tier_data in tiers.items():
             for lang in tier_data.get("languages", []):
                 for label in ["harmful", "harmless"]:
-                    candidates = [
-                        pert_dir / tier_name / lang / f"{label}.csv",
-                        pert_dir / tier_name / lang / f"{label}_prompts.csv",
-                    ]
-                    
-                    csv_path = None
-                    for cand in candidates:
-                        if cand.exists():
-                            csv_path = cand
-                            break
-                    
-                    if csv_path is None:
-                        logger.warning(f"Missing: {candidates[0]}")
-                        missing_files.append(str(candidates[0]))
-                        continue
+                    csv_path = pert_dir / tier_name / lang / f"{label}.csv"
                     if not csv_path.exists():
                         logger.warning(f"Missing: {csv_path}")
                         missing_files.append(str(csv_path))
@@ -113,21 +99,7 @@ def main():
 
     # Minionese: flat structure
     for label in ["harmful", "harmless"]:
-        candidates = [
-            dataset_dir / "minionese" / f"{label}.csv",
-            dataset_dir / "minionese" / f"{label}_prompts.csv",
-        ]
-        
-        csv_path = None
-        for cand in candidates:
-            if cand.exists():
-                csv_path = cand
-                break
-        
-        if csv_path is None:
-            logger.warning(f"Missing minionese: {candidates[0]}")
-            missing_files.append(str(candidates[0]))
-            continue
+        csv_path = dataset_dir / "minionese" / f"{label}.csv"
         if not csv_path.exists():
             logger.warning(f"Missing minionese: {csv_path}")
             missing_files.append(str(csv_path))

@@ -1,5 +1,5 @@
 tiers:
-  tier_1:
+  tier1:
     languages: ["en", "de", "fr", "zh", "es"]
     label: "High-resource"
     script_types:
@@ -8,8 +8,7 @@ tiers:
       fr: "latin"
       zh: "hanzi"
       es: "latin"
-
-  tier_2:
+  tier2:
     languages: ["ar", "ru", "ko", "ja"]
     label: "Mid-resource"
     script_types:
@@ -17,8 +16,7 @@ tiers:
       ru: "cyrillic"
       ko: "hangul"
       ja: "mixed"
-
-  tier_3:
+  tier3:
     languages: ["tr", "id", "hi", "sw"]
     label: "Low-resource"
     script_types:
@@ -26,19 +24,20 @@ tiers:
       id: "latin"
       hi: "devanagari"
       sw: "latin"
-
-  tier_4:
-    languages: ["yo", "zu", "gd", "gn"]
+  tier4:
+    languages: ["yo", "zu", "gd", "gn", "jv"]
     label: "Very-low-resource"
     script_types:
       yo: "latin"
       zu: "latin"
       gd: "latin"
       gn: "latin"
+      jv: "latin"
 
 perturbation_types:
-  - "standard_translation"
-  - "translationese"
-  - "code_switching"
-  - "transliteration"
-  - "minionese"
+  # These MUST match the folder names in dataset/
+  - "standard_translation"   # Direct translation via Google Translate API
+  - "translationese"         # EN -> LangX -> EN -> LangX (via open-source model, 3 rounds)
+  - "code_switching"         # NER/POS tag harm-relevant nouns, swap to target language
+  - "transliteration"        # Non-Latin scripts -> Latin; Latin scripts -> phonetic non-Latin
+  - "minionese"              # Constructed gibberish language (flat structure, no tiers/langs)

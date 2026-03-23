@@ -183,21 +183,10 @@ def load_dataset(
             if tiers is not None and "none" not in tiers:
                 continue
             for label, is_harmful in [("harmful", True), ("harmless", False)]:
-                candidates = [
-                    pert_dir / f"{label}.csv",
-                    pert_dir / f"{label}_prompts.csv",
-                ]
-            
-                csv_path = None
-                for cand in candidates:
-                    if cand.exists():
-                        csv_path = cand
-                        break
-            
-                if csv_path is None:
-                    logger.warning(f"Missing: {candidates[0]}")
+                csv_path = pert_dir / f"{label}.csv"
+                if not csv_path.exists():
+                    logger.warning(f"Missing: {csv_path}")
                     continue
-            
                 try:
                     df = _load_csv(str(csv_path))
                     df["perturbation"] = pert
@@ -222,20 +211,7 @@ def load_dataset(
                     if languages is not None and lang not in languages:
                         continue
                     for label, is_harmful in [("harmful", True), ("harmless", False)]:
-                        candidates = [
-                            lang_dir / f"{label}.csv",
-                            lang_dir / f"{label}_prompts.csv",
-                        ]
-                        
-                        csv_path = None
-                        for cand in candidates:
-                            if cand.exists():
-                                csv_path = cand
-                                break
-                        
-                        if csv_path is None:
-                            logger.warning(f"Missing: {candidates[0]}")
-                            continue
+                        csv_path = lang_dir / f"{label}.csv"
                         if not csv_path.exists():
                             logger.warning(f"Missing: {csv_path}")
                             continue
