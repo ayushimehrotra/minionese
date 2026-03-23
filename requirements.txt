@@ -23,3 +23,6 @@ einops>=0.7.0
 jaxtyping>=0.2.25
 wandb>=0.16.0
 pytest>=8.0.0
+pandas
+transformers
+accelerate

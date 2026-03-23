@@ -22,6 +22,7 @@ def generate_responses(
     batch_size: int = 8,
     output_path: Optional[str] = None,
     prompt_ids: Optional[List[str]] = None,
+    hf_token: Optional[str] = None,   # add this
 ) -> List[dict]:
     """
     Run prompts through a causal language model and collect responses.
@@ -38,13 +39,21 @@ def generate_responses(
     Returns:
         List of result dicts, one per prompt.
     """
+    logger.info(f"HF token present? {hf_token is not None}")
+    if hf_token is not None:
+        logger.info(f"HF token prefix: {hf_token[:8]}")
+    
     import torch
     from transformers import AutoModelForCausalLM, AutoTokenizer
 
     from src.utils.gpu import log_gpu_memory, clear_gpu_memory
 
     logger.info(f"Loading model: {model_name}")
-    tokenizer = AutoTokenizer.from_pretrained(model_name, trust_remote_code=True)
+    tokenizer = AutoTokenizer.from_pretrained(
+        model_name,
+        token=hf_token,
+        trust_remote_code=True,
+    )
 
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
@@ -53,6 +62,7 @@ def generate_responses(
 
     model = AutoModelForCausalLM.from_pretrained(
         model_name,
+        token=hf_token,
         torch_dtype=torch.bfloat16,
         device_map="auto",
         trust_remote_code=True,

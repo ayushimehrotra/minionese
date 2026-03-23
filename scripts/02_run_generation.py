@@ -3,17 +3,13 @@
 Script 02: Run Generation
 
 Generate model responses for all languages x perturbations.
-
-Usage:
-    python scripts/02_run_generation.py \
-        --model llama \
-        --dataset-dir dataset/ \
-        --output-dir results/generations/
 """
 
 import argparse
 import logging
+import os
 import sys
+from getpass import getpass
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -36,10 +32,27 @@ def parse_args():
     parser.add_argument("--languages", nargs="+", default=None)
     parser.add_argument("--batch-size", type=int, default=8)
     parser.add_argument("--max-new-tokens", type=int, default=512)
+    parser.add_argument("--hf-token", default=None,
+                        help="Hugging Face token. If omitted, uses HF_TOKEN env var or prompts securely.")
     parser.add_argument("--dry-run", action="store_true",
                         help="Load dataset and validate without running inference.")
     parser.add_argument("--log-level", default="INFO")
     return parser.parse_args()
+
+
+def resolve_hf_token(cli_token: str | None) -> str | None:
+    # Priority: CLI arg -> environment variable -> interactive prompt
+    token = cli_token or os.environ.get("HF_TOKEN")
+    if token:
+        return token.strip()
+
+    print("\nThis model may require Hugging Face authentication.")
+    print("Paste your HF token below. Input will be hidden.")
+    token = getpass("HF token: ").strip()
+
+    if not token:
+        return None
+    return token
 
 
 def main():
@@ -74,10 +87,16 @@ def main():
         logger.info("[DRY RUN] Exiting.")
         return
 
+    hf_token = resolve_hf_token(args.hf_token)
+
     # Format prompts with chat template
     from transformers import AutoTokenizer
     logger.info("Loading tokenizer...")
-    tokenizer = AutoTokenizer.from_pretrained(model_name, trust_remote_code=True)
+    tokenizer = AutoTokenizer.from_pretrained(
+        model_name,
+        trust_remote_code=True,
+        token=hf_token,
+    )
 
     logger.info("Applying chat template...")
     df = format_for_model(df, model_name, tokenizer)
@@ -105,6 +124,7 @@ def main():
             batch_size=args.batch_size,
             output_path=str(output_file),
             prompt_ids=prompt_ids,
+            hf_token=hf_token,   # <-- ADD THIS LINE
         )
 
         logger.info(f"Done: {pert}/{lang} -> {len(results)} responses saved.")
