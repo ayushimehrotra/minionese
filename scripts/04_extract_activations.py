@@ -124,8 +124,8 @@ def main():
                 components=args.components,
                 prompt_metadata=metadata,
             )
-        except Exception as e:
-            logger.error(f"Extraction failed for {pert}/{lang}: {e}")
+        except Exception:
+            logger.exception(f"Extraction failed for {pert}/{lang}")
             continue
 
     logger.info("Activation extraction pipeline complete.")

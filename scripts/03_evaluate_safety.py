@@ -13,11 +13,14 @@ Usage:
 import argparse
 import json
 import logging
+import os
 import sys
+from getpass import getpass
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
+from huggingface_hub import login
 from src.evaluation.asr import compute_asr, asr_by_tier, asr_delta_from_english
 from src.evaluation.generation import load_responses
 from src.evaluation.safety_judge import score_wildguard, score_llamaguard, compute_agreement
@@ -34,7 +37,56 @@ def parse_args():
     parser.add_argument("--batch-size", type=int, default=8)
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--log-level", default="INFO")
+
+    # NEW
+    parser.add_argument(
+        "--hf-token",
+        default=None,
+        help="Hugging Face token. If omitted, uses HF_TOKEN env var or prompts interactively."
+    )
+    parser.add_argument(
+        "--no-hf-login",
+        action="store_true",
+        help="Do not persist token via huggingface_hub.login(); only use it for this process."
+    )
     return parser.parse_args()
+
+
+def ensure_hf_token(args, logger):
+    """
+    Get an HF token from:
+      1) --hf-token
+      2) HF_TOKEN environment variable
+      3) interactive prompt
+    Then expose it to downstream code and optionally persist it.
+    """
+    token = args.hf_token or os.environ.get("HF_TOKEN")
+
+    if not token:
+        if sys.stdin.isatty():
+            token = getpass("Enter your Hugging Face token (hf_...): ").strip()
+        else:
+            raise RuntimeError(
+                "No Hugging Face token found. "
+                "Pass --hf-token, set HF_TOKEN, or run interactively."
+            )
+
+    if not token or not token.startswith("hf_"):
+        raise RuntimeError("Invalid Hugging Face token format. Expected something starting with 'hf_'.")
+
+    # Make it visible to any library that reads HF_TOKEN.
+    os.environ["HF_TOKEN"] = token
+
+    # Optional: cache the token for future runs.
+    if not args.no_hf_login:
+        try:
+            login(token=token, add_to_git_credential=False, skip_if_logged_in=False)
+            logger.info("Logged into Hugging Face Hub for this machine.")
+        except Exception as e:
+            # Not fatal if direct token passing still works
+            logger.warning(f"HF login() failed, but continuing with in-process token: {e}")
+
+    return token
 
 
 def main():
@@ -75,16 +127,29 @@ def main():
         logger.info(f"[DRY RUN] Would evaluate {len(all_responses)} responses.")
         return
 
+    # NEW: only ask once, before the first gated model load
+    hf_token = ensure_hf_token(args, logger)
+
     # WildGuard scoring
     logger.info("Running WildGuard...")
     cache_path = str(output_dir / "wildguard_cache.jsonl")
-    scored = score_wildguard(all_responses, batch_size=args.batch_size, cache_path=cache_path)
+    scored = score_wildguard(
+        all_responses,
+        batch_size=args.batch_size,
+        cache_path=cache_path,
+        hf_token=hf_token,   # NEW
+    )
 
     # LlamaGuard scoring (optional)
     if not args.skip_llamaguard:
         logger.info("Running LlamaGuard...")
         lg_cache = str(output_dir / "llamaguard_cache.jsonl")
-        scored = score_llamaguard(scored, batch_size=args.batch_size, cache_path=lg_cache)
+        scored = score_llamaguard(
+            scored,
+            batch_size=args.batch_size,
+            cache_path=lg_cache,
+            hf_token=hf_token,   # NEW
+        )
 
         agreement = compute_agreement(scored)
         with open(output_dir / "judge_agreement.json", "w") as f:

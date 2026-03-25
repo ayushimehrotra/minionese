@@ -61,7 +61,13 @@ def extract_activations(
     torch_dtype = torch.float32 if dtype == "float32" else torch.float16
 
     logger.info(f"Loading model via NNsight: {model_name}")
-    lm = LanguageModel(model_name, device_map="auto", torch_dtype=torch.bfloat16)
+    lm = LanguageModel(
+        model_name,
+        device_map="auto",
+        dtype=torch.bfloat16,
+        dispatch=True,
+    )
+    logger.info(f"NNsight model device: {lm.device}")
     tokenizer = AutoTokenizer.from_pretrained(model_name, trust_remote_code=True)
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
@@ -114,54 +120,77 @@ def extract_activations(
                 pos_indices[pos_name].append(adjusted_idx)
 
         # NNsight trace
+        saved = {}
         with torch.no_grad():
-            with lm.trace(input_ids.to(lm.device)) as tracer:
-                saved = {}
+            with lm.trace(input_ids.to(lm.device)):
+                
+        
                 for layer_idx in layer_indices:
                     try:
                         layer = lm.model.layers[layer_idx]
                     except AttributeError:
                         layer = lm.model.model.layers[layer_idx]
-
+        
+                    # Access in forward order
+                    attn_out = None
+                    if "attn_out" in components:
+                        attn_out = layer.self_attn.o_proj.output
+        
+                    mlp_out = None
+                    if "mlp_out" in components:
+                        mlp_out = layer.mlp.output
+        
+                    resid = None
+                    if "residual" in components:
+                        resid = layer.output
+        
                     for pos_name in token_positions:
-                        # We'll extract per-sample below
-                        if "residual" in components:
-                            h = layer.output[0]
-                            saved[(pos_name, "residual", layer_idx)] = h.save()
-                        if "attn_out" in components:
-                            try:
-                                attn = layer.self_attn.output[0]
-                                saved[(pos_name, "attn_out", layer_idx)] = attn.save()
-                            except AttributeError:
-                                pass
-                        if "mlp_out" in components:
-                            try:
-                                mlp = layer.mlp.output
-                                if isinstance(mlp, tuple):
-                                    mlp = mlp[0]
-                                saved[(pos_name, "mlp_out", layer_idx)] = mlp.save()
-                            except AttributeError:
-                                pass
+                        if attn_out is not None:
+                            saved[(pos_name, "attn_out", layer_idx)] = attn_out.save()
+                        if mlp_out is not None:
+                            saved[(pos_name, "mlp_out", layer_idx)] = mlp_out.save()
+                        if resid is not None:
+                            saved[(pos_name, "residual", layer_idx)] = resid.save()
 
         # Extract per-position activations from saved tensors
         for layer_idx in layer_indices:
             for pos_name in token_positions:
                 for comp in components:
                     key = (pos_name, comp, layer_idx)
-                    if key not in saved:
-                        continue
-                    tensor = saved[key].value  # (batch, seq, hidden)
+                    
+                    
+                    
+                    
+                    tensor = saved.get(key)
                     if tensor is None:
                         continue
-
-                    # Gather specific token positions for each sample
+                    
                     batch_extracted = []
-                    for sample_idx in range(tensor.shape[0]):
-                        tok_idx = pos_indices[pos_name][sample_idx]
-                        tok_idx = max(0, min(tok_idx, tensor.shape[1] - 1))
-                        vec = tensor[sample_idx, tok_idx, :].detach().to(torch_dtype).cpu()
+                    
+                    if tensor.ndim == 3:
+                        # expected: (batch, seq, hidden)
+                        logger.info(f"{key} tensor shape: {tuple(tensor.shape)}")
+                        for sample_idx in range(tensor.shape[0]):
+                            tok_idx = pos_indices[pos_name][sample_idx]
+                            tok_idx = max(0, min(tok_idx, tensor.shape[1] - 1))
+                            vec = tensor[sample_idx, tok_idx, :].detach().to(torch_dtype).cpu()
+                            batch_extracted.append(vec)
+                    
+                    elif tensor.ndim == 2:
+                        # likely single-example trace: (seq, hidden)
+                        if len(batch_prompts) != 1:
+                            raise RuntimeError(
+                                f"Got 2D tensor for key={key} with batch size {len(batch_prompts)}; "
+                                f"shape={tuple(tensor.shape)}"
+                            )
+                        tok_idx = pos_indices[pos_name][0]
+                        tok_idx = max(0, min(tok_idx, tensor.shape[0] - 1))
+                        vec = tensor[tok_idx, :].detach().to(torch_dtype).cpu()
                         batch_extracted.append(vec)
-
+                    
+                    else:
+                        raise RuntimeError(f"Unexpected tensor rank for key={key}: shape={tuple(tensor.shape)}")
+                    
                     accumulators[key].extend(batch_extracted)
 
         logger.info(

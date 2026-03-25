@@ -91,6 +91,7 @@ python scripts/04_extract_activations.py \
     --output-dir data/activations/ \
     --positions last_instruction last_post_instruction last \
     --components residual attn_out mlp_out
+    --dtype float16
 ```
 
 **Most compute-intensive step** (~12 hours per model on 1xA100). Caches activations to disk as .safetensors files. Supports `--skip-existing` for resume.
