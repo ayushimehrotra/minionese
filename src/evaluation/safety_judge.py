@@ -6,10 +6,16 @@ Score model responses using WildGuard (primary) and LlamaGuard (secondary).
 
 import json
 import logging
+import os
+import sys
+from getpass import getpass
 from pathlib import Path
 from typing import List, Optional
 
 logger = logging.getLogger(__name__)
+
+# Cache token so we only prompt once per process
+_HF_TOKEN_CACHE = None
 
 # WildGuard prompt template
 WILDGUARD_TEMPLATE = (
@@ -23,10 +29,57 @@ WILDGUARD_TEMPLATE = (
 )
 
 
+def _ensure_hf_token(hf_token: Optional[str] = None, persist_login: bool = True) -> str:
+    """
+    Resolve a Hugging Face token from:
+      1) explicit hf_token argument
+      2) cached module-level token
+      3) HF_TOKEN / HUGGING_FACE_HUB_TOKEN environment variables
+      4) interactive prompt
+
+    Also stores it in os.environ for downstream libraries.
+    """
+    global _HF_TOKEN_CACHE
+
+    token = (
+        hf_token
+        or _HF_TOKEN_CACHE
+        or os.environ.get("HF_TOKEN")
+        or os.environ.get("HUGGING_FACE_HUB_TOKEN")
+    )
+
+    if not token:
+        if not sys.stdin.isatty():
+            raise RuntimeError(
+                "No Hugging Face token found. Set HF_TOKEN, pass hf_token, "
+                "or run interactively so the script can prompt for it."
+            )
+        token = getpass("Enter your Hugging Face token (hf_...): ").strip()
+
+    if not token or not token.startswith("hf_"):
+        raise RuntimeError("Invalid Hugging Face token. Expected a token starting with 'hf_'.")
+
+    _HF_TOKEN_CACHE = token
+    os.environ["HF_TOKEN"] = token
+    os.environ["HUGGING_FACE_HUB_TOKEN"] = token
+
+    if persist_login:
+        try:
+            from huggingface_hub import login
+            login(token=token, add_to_git_credential=False, skip_if_logged_in=False)
+            logger.info("Authenticated with Hugging Face Hub.")
+        except Exception as e:
+            # Non-fatal: direct token passing still works
+            logger.warning(f"Could not persist Hugging Face login; continuing with in-process token only: {e}")
+
+    return token
+
+
 def score_wildguard(
     responses: List[dict],
     batch_size: int = 8,
     cache_path: Optional[str] = None,
+    hf_token: Optional[str] = None,
 ) -> List[dict]:
     """
     Score responses using allenai/wildguard.
@@ -35,12 +88,16 @@ def score_wildguard(
         responses: List of dicts with 'prompt' and 'response' keys.
         batch_size: Number of examples per batch.
         cache_path: Optional path to cache/load results as JSONL.
+        hf_token: Optional Hugging Face token for gated model access.
 
     Returns:
         List of dicts augmented with 'wildguard_label' and 'wildguard_score'.
     """
+    import gc
     import torch
     from transformers import AutoModelForCausalLM, AutoTokenizer
+
+    token = _ensure_hf_token(hf_token)
 
     # Load cache
     cached = {}
@@ -52,9 +109,14 @@ def score_wildguard(
 
     model_name = "allenai/wildguard"
     logger.info(f"Loading {model_name}...")
-    tokenizer = AutoTokenizer.from_pretrained(model_name)
+    tokenizer = AutoTokenizer.from_pretrained(
+        model_name,
+        token=token,
+        use_fast=False,
+    )
     model = AutoModelForCausalLM.from_pretrained(
         model_name,
+        token=token,
         torch_dtype=torch.bfloat16,
         device_map="auto",
     )
@@ -112,12 +174,9 @@ def score_wildguard(
         results.extend(batch_results)
         logger.info(f"WildGuard: processed {min(i + batch_size, len(responses))}/{len(responses)}")
 
-    # Clean up
     del model
-    import gc
     gc.collect()
     try:
-        import torch
         torch.cuda.empty_cache()
     except Exception:
         pass
@@ -129,6 +188,7 @@ def score_llamaguard(
     responses: List[dict],
     batch_size: int = 8,
     cache_path: Optional[str] = None,
+    hf_token: Optional[str] = None,
 ) -> List[dict]:
     """
     Score responses using meta-llama/LlamaGuard-3-8B.
@@ -137,12 +197,16 @@ def score_llamaguard(
         responses: List of dicts with 'prompt' and 'response' keys.
         batch_size: Number of examples per batch.
         cache_path: Optional path to cache/load results as JSONL.
+        hf_token: Optional Hugging Face token for gated model access.
 
     Returns:
         List of dicts augmented with 'llamaguard_label' and 'llamaguard_category'.
     """
+    import gc
     import torch
     from transformers import AutoModelForCausalLM, AutoTokenizer
+
+    token = _ensure_hf_token(hf_token)
 
     cached = {}
     if cache_path and Path(cache_path).exists():
@@ -153,9 +217,14 @@ def score_llamaguard(
 
     model_name = "meta-llama/LlamaGuard-3-8B"
     logger.info(f"Loading {model_name}...")
-    tokenizer = AutoTokenizer.from_pretrained(model_name)
+    tokenizer = AutoTokenizer.from_pretrained(
+        model_name,
+        token=token,
+        use_fast=False,
+    )
     model = AutoModelForCausalLM.from_pretrained(
         model_name,
+        token=token,
         torch_dtype=torch.bfloat16,
         device_map="auto",
     )
@@ -220,10 +289,8 @@ def score_llamaguard(
         logger.info(f"LlamaGuard: processed {min(i + batch_size, len(responses))}/{len(responses)}")
 
     del model
-    import gc
     gc.collect()
     try:
-        import torch
         torch.cuda.empty_cache()
     except Exception:
         pass
@@ -260,7 +327,6 @@ def compute_agreement(results: List[dict]) -> dict:
         logger.warning(f"Could not compute kappa: {e}")
         kappa = None
 
-    # Per-category agreement
     categories = set(r.get("category", "unknown") for r in filtered)
     per_cat = {}
     for cat in categories:
@@ -280,5 +346,5 @@ def compute_agreement(results: List[dict]) -> dict:
         "kappa": kappa,
         "per_category_agreement": per_cat,
         "n_disagreements": len(disagreements),
-        "disagreements": disagreements[:20],  # limit for logging
+        "disagreements": disagreements[:20],
     }

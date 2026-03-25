@@ -17,3 +17,4 @@ trained_saes/
 wandb/
 .ipynb_checkpoints
 .mypy_cache
+git.envgit.env
