@@ -1,22 +1,13 @@
 #!/usr/bin/env python3
 """
 Script 04: Extract Activations
-
-Extract and cache model activations for all languages x perturbations.
-This is the most compute-intensive step.
-
-Usage:
-    python scripts/04_extract_activations.py \
-        --model llama \
-        --dataset-dir dataset/ \
-        --output-dir data/activations/ \
-        --positions last_instruction last_post_instruction last \
-        --components residual attn_out mlp_out
 """
 
 import argparse
 import logging
+import os
 import sys
+from getpass import getpass
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -44,11 +35,26 @@ def parse_args():
     parser.add_argument("--languages", nargs="+", default=None)
     parser.add_argument("--batch-size", type=int, default=4)
     parser.add_argument("--dtype", default="float16", choices=["float32", "float16"])
+    parser.add_argument("--hf-token", default=None,
+                        help="Hugging Face token. If omitted, the script will use env vars or prompt securely.")
     parser.add_argument("--skip-existing", action="store_true", default=True,
                         help="Skip if cached file already exists.")
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--log-level", default="INFO")
     return parser.parse_args()
+
+
+def resolve_hf_token(cli_token: str | None) -> str | None:
+    if cli_token:
+        return cli_token.strip()
+
+    for env_name in ("HUGGINGFACE_HUB_TOKEN", "HF_TOKEN", "HF_HUB_TOKEN"):
+        value = os.environ.get(env_name)
+        if value and value.strip():
+            return value.strip()
+
+    token = getpass("Enter your Hugging Face token (input hidden): ").strip()
+    return token or None
 
 
 def main():
@@ -61,6 +67,16 @@ def main():
     model_cfg = get_model_config(config, args.model)
     model_name = model_cfg["name"]
     model_short = _model_short_name(model_name)
+
+    hf_token = resolve_hf_token(args.hf_token)
+    if hf_token is None:
+        logger.error("No Hugging Face token provided.")
+        sys.exit(1)
+
+    # Make the token available to transformers / huggingface_hub / nested loads in extract.py
+    os.environ["HUGGINGFACE_HUB_TOKEN"] = hf_token
+    os.environ["HF_TOKEN"] = hf_token
+    os.environ["HF_HUB_TOKEN"] = hf_token
 
     # Parse layers
     if args.layers == "all":
@@ -81,20 +97,22 @@ def main():
 
     logger.info("Loading tokenizer...")
     from transformers import AutoTokenizer
-    tokenizer = AutoTokenizer.from_pretrained(model_name, trust_remote_code=True)
+    tokenizer = AutoTokenizer.from_pretrained(
+        model_name,
+        trust_remote_code=True,
+        token=hf_token,
+    )
     df = format_for_model(df, model_name, tokenizer)
 
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    # Process one (perturbation, language) at a time
     groups = df.groupby(["perturbation", "language"])
     total = len(groups)
 
     for idx, ((pert, lang), grp) in enumerate(groups):
         logger.info(f"[{idx + 1}/{total}] Processing: {pert}/{lang} ({len(grp)} prompts)")
 
-        # Check if all cached files already exist
         if args.skip_existing:
             all_exist = all(
                 activation_exists(model_short, lang, pert, pos, comp, str(output_dir))
