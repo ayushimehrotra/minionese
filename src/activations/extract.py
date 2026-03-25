@@ -193,13 +193,6 @@ def extract_activations(
                     
                     accumulators[key].extend(batch_extracted)
 
-
-
-
-                    
-
-                    accumulators[key].extend(batch_extracted)
-
         logger.info(
             f"Extracted batch {batch_start // batch_size + 1}/"
             f"{(len(prompts) + batch_size - 1) // batch_size}"
