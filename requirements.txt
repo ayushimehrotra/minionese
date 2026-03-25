@@ -8,7 +8,6 @@ transformers>=4.40.0
 accelerate>=0.27.0
 nnsight>=0.3.0
 sae-lens>=3.0.0
-sparsify>=0.1.0            # EleutherAI SAE training (fallback for Qwen)
 scikit-learn>=1.4.0
 scipy>=1.12.0
 numpy>=1.26.0
