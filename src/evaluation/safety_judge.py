@@ -215,7 +215,7 @@ def score_llamaguard(
                 rec = json.loads(line)
                 cached[rec.get("prompt_id", "")] = rec
 
-    model_name = "meta-llama/LlamaGuard-3-8B"
+    model_name = "meta-llama/Llama-Guard-3-8B"
     logger.info(f"Loading {model_name}...")
     tokenizer = AutoTokenizer.from_pretrained(
         model_name,
