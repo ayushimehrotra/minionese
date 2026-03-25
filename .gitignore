@@ -18,3 +18,4 @@ wandb/
 .ipynb_checkpoints
 .mypy_cache
 git.envgit.env
+git.env
