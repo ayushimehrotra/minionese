@@ -43,7 +43,7 @@ def parse_args():
     parser.add_argument("--perturbations", nargs="+", default=None)
     parser.add_argument("--languages", nargs="+", default=None)
     parser.add_argument("--batch-size", type=int, default=4)
-    parser.add_argument("--dtype", default="float32", choices=["float32", "float16"])
+    parser.add_argument("--dtype", default="float16", choices=["float32", "float16"])
     parser.add_argument("--skip-existing", action="store_true", default=True,
                         help="Skip if cached file already exists.")
     parser.add_argument("--dry-run", action="store_true")
