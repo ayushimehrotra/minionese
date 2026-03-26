@@ -53,6 +53,8 @@ def train_probe(
         max_iter=1000,
         scoring="roc_auc",
         n_jobs=-1,
+        l1_ratios=(0.0,),
+        use_legacy_attributes=False,
     )
     clf.fit(X_scaled, y)
 
@@ -67,9 +69,9 @@ def train_probe(
     accuracy = (y_pred == y).mean()
 
     return {
-        "weights": clf.coef_[0].copy(),          # (hidden_dim,)
+        "weights": clf.coef_[0].copy(),
         "bias": float(clf.intercept_[0]),
-        "best_C": float(clf.C_[0]),
+        "best_C": float(np.asarray(clf.C_).reshape(-1)[0]),
         "cv_accuracy": float(accuracy),
         "cv_auc": float(auc),
         "classification_report": classification_report(y, y_pred, output_dict=True),
