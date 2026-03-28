@@ -6,9 +6,23 @@ even when prompted in another language.
 """
 
 import logging
+import re
 from typing import Dict, List, Tuple
 
 logger = logging.getLogger(__name__)
+
+
+def _sanitize_text_for_langid(text: str) -> str:
+    """
+    ftlangdetect expects one line at a time, so remove newlines and collapse
+    repeated whitespace.
+    """
+    if text is None:
+        return ""
+    text = str(text)
+    text = text.replace("\r", " ").replace("\n", " ")
+    text = re.sub(r"\s+", " ", text).strip()
+    return text
 
 
 def detect_language(text: str) -> Tuple[str, float]:
@@ -21,9 +35,13 @@ def detect_language(text: str) -> Tuple[str, float]:
     Returns:
         Tuple of (language_code, confidence_score).
     """
+    cleaned = _sanitize_text_for_langid(text)
+    if not cleaned:
+        return "unknown", 0.0
+
     try:
         from ftlangdetect import detect
-        result = detect(text, low_memory=False)
+        result = detect(cleaned, low_memory=False)
         return result["lang"], result["score"]
     except ImportError:
         logger.warning("ftlangdetect not available. Returning 'unknown'.")
@@ -58,14 +76,13 @@ def compute_langid_consistency(
 
     for prompt_dict, response in zip(prompts, responses):
         target_lang = prompt_dict.get("language", "unknown")
-        if not response or not response.strip():
-            total[target_lang] += 1
+        total[target_lang] += 1
+
+        if not response or not str(response).strip():
             continue
 
         detected_lang, score = detect_language(response)
-        total[target_lang] += 1
 
-        # Normalize: map common variants
         detected_norm = _normalize_lang_code(detected_lang)
         target_norm = _normalize_lang_code(target_lang)
 
@@ -82,10 +99,11 @@ def compute_langid_consistency(
 
 def _normalize_lang_code(code: str) -> str:
     """Normalize language codes (e.g., 'zh-cn' -> 'zh')."""
-    code = code.lower().strip()
-    # Strip region suffix
+    code = str(code).lower().strip()
     if "-" in code:
         code = code.split("-")[0]
+    if "_" in code:
+        code = code.split("_")[0]
     return code
 
 
@@ -106,17 +124,24 @@ def compute_english_switch_rate(
     non_en = [
         (p, r)
         for p, r in zip(prompts, responses)
-        if p.get("language", "en") != "en"
+        if _normalize_lang_code(p.get("language", "en")) != "en"
     ]
     if not non_en:
         return 0.0
 
     switched = 0
+    valid = 0
+
     for _, response in non_en:
-        if not response.strip():
+        if not response or not str(response).strip():
             continue
+
+        valid += 1
         detected_lang, _ = detect_language(response)
         if _normalize_lang_code(detected_lang) == "en":
             switched += 1
 
-    return switched / len(non_en)
+    if valid == 0:
+        return 0.0
+
+    return switched / valid

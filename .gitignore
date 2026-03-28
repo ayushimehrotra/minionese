@@ -19,3 +19,10 @@ wandb/
 .mypy_cache
 git.envgit.env
 git.env
+safety_scores.zip
+results.zip
+
+results.zip
+safety_scores.zip
+*.zip
+results/

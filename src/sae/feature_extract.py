@@ -1,131 +1,207 @@
+#!/usr/bin/env python3
 """
-SAE Feature Extraction via SAELens
+Utilities for loading sparse autoencoders (SAEs) and encoding activations.
+"""
 
-Decompose activations into SAE features at critical layers.
-"""
+from __future__ import annotations
 
 import logging
-from typing import List
+import os
+from typing import Any, Optional
 
 import torch
 
 logger = logging.getLogger(__name__)
 
-# SAE suite IDs per model (SAELens conventions)
-SAE_SUITE_IDS = {
-    "llama": {
-        "primary": "fnlp/Llama-Scope-8B-Base-LXR-32x-TopK",
-        "fallback": "EleutherAI/sae-llama-3.1-8b-32x",
-    },
-    "gemma": {
-        "primary": "google/gemma-scope-9b-it-res",
-        "fallback": "google/gemma-scope-9b-pt-res",
-    },
-    "qwen": {
-        "primary": "andyrdt/saes-qwen2.5-7b-instruct",
-        "fallback": None,
-    },
-}
+
+def _hf_token() -> Optional[str]:
+    return (
+        os.environ.get("HF_TOKEN")
+        or os.environ.get("HUGGINGFACE_HUB_TOKEN")
+        or os.environ.get("HF_HUB_TOKEN")
+    )
 
 
-def load_sae(model_name: str, layer: int):
+def _normalize_model_name(model_name: str) -> str:
+    if not model_name:
+        return ""
+    name = model_name.lower().strip()
+    if any(x in name for x in [
+        "meta-llama/llama-3.1-8b",
+        "llama-3.1-8b",
+        "llama3.1-8b",
+        "llama_3.1_8b",
+        "llama",
+    ]):
+        return "llama-3.1-8b"
+    return name
+
+
+def _get_hookpoint(layer: int, hook_component: str = "mlp") -> str:
+    comp = hook_component.lower().strip()
+    if comp in {"mlp", "mlp_out"}:
+        return f"layers.{layer}.mlp"
+    if comp in {"resid", "residual", "resid_post", "hidden", "hidden_state"}:
+        return f"layers.{layer}"
+    if comp in {"attn", "attn_out"}:
+        return f"layers.{layer}.attn"
+    raise ValueError(f"Unsupported hook_component: {hook_component}")
+
+
+def _to_device_dtype(x: torch.Tensor) -> torch.Tensor:
+    if not isinstance(x, torch.Tensor):
+        x = torch.as_tensor(x)
+    return x.to(dtype=torch.float32)
+
+
+def load_sae(model_name: str, layer: int, hook_component: str = "mlp") -> Any:
     """
-    Load the SAE for a given model and layer from HuggingFace.
+    Load an SAE for a given model/layer/component.
 
-    Args:
-        model_name: HuggingFace model name.
-        layer: Layer index.
-
-    Returns:
-        SAELens SAE object.
+    This version uses the public 64x Llama 3.1 8B SAE repo, which is documented
+    to load via the `sparsify` library.
     """
-    try:
-        from sae_lens import SAE
-    except ImportError:
-        raise ImportError("SAELens is required. Install with: pip install sae-lens")
+    norm_model = _normalize_model_name(model_name)
+    logger.info(
+        "Requested SAE load: model_name=%s normalized=%s layer=%s hook_component=%s",
+        model_name,
+        norm_model,
+        layer,
+        hook_component,
+    )
 
-    from src.sae.train_sae import check_sae_availability, _model_short
-
-    avail = check_sae_availability(model_name)
-    model_short = _model_short(model_name)
-    suite = avail["hf_repo"]
-    sae_id = _build_sae_id(model_short, layer)
-
-    try:
-        logger.info(f"Loading SAE from {suite}, sae_id={sae_id}, layer={layer}")
-        sae, _, _ = SAE.from_pretrained(
-            release=suite,
-            sae_id=sae_id,
-            device="cuda" if torch.cuda.is_available() else "cpu",
+    if "llama-3.1-8b" not in norm_model and norm_model != "llama":
+        logger.warning(
+            "This loader is primarily configured for Llama 3.1 8B SAEs. "
+            "Received model_name=%s",
+            model_name,
         )
-        return sae
-    except Exception as e:
-        fallback = avail.get("fallback")
-        if fallback:
-            logger.warning(f"Primary SAE suite failed ({e}), trying fallback: {fallback}")
-            sae, _, _ = SAE.from_pretrained(
-                release=fallback,
-                sae_id=sae_id,
-                device="cuda" if torch.cuda.is_available() else "cpu",
-            )
-            return sae
-        raise
+
+    hookpoint = _get_hookpoint(layer, hook_component=hook_component)
+
+    # Use 64x because the public model card explicitly documents sparsify loading.
+    repo_id = "EleutherAI/sae-llama-3.1-8b-64x"
+
+    try:
+        from sparsify import Sae
+    except ImportError as e:
+        raise RuntimeError(
+            "Missing SAE loader package. Install it with:\n"
+            "pip install -U eai-sparsify"
+        ) from e
+
+    kwargs = {}
+    token = _hf_token()
+    if token:
+        kwargs["token"] = token
+
+    logger.info(
+        "Loading EleutherAI SAE via sparsify.Sae.load_from_hub(repo=%s, hookpoint=%s)",
+        repo_id,
+        hookpoint,
+    )
+
+    try:
+        sae = Sae.load_from_hub(repo_id, hookpoint=hookpoint, **kwargs)
+    except TypeError:
+        sae = Sae.load_from_hub(repo_id, hookpoint=hookpoint)
+
+    if hasattr(sae, "eval"):
+        sae.eval()
+
+    return sae
 
 
-def _build_sae_id(model_short: str, layer: int) -> str:
-    """Build SAE ID string for a given model and layer."""
-    if model_short == "gemma":
-        return f"layer_{layer}/width_16k/average_l0_100"
-    elif model_short == "llama":
-        return f"layer_{layer}"
-    return f"layer_{layer}"
+def _extract_feature_tensor(encoded: Any) -> torch.Tensor:
+    if isinstance(encoded, torch.Tensor):
+        return encoded
+
+    if hasattr(encoded, "features"):
+        feats = getattr(encoded, "features")
+        if isinstance(feats, torch.Tensor):
+            return feats
+
+    if hasattr(encoded, "acts"):
+        feats = getattr(encoded, "acts")
+        if isinstance(feats, torch.Tensor):
+            return feats
+
+    if hasattr(encoded, "latents"):
+        feats = getattr(encoded, "latents")
+        if isinstance(feats, torch.Tensor):
+            return feats
+
+    if isinstance(encoded, dict):
+        for key in ("features", "acts", "codes", "latent_acts", "z", "latents"):
+            if key in encoded and isinstance(encoded[key], torch.Tensor):
+                return encoded[key]
+
+    if isinstance(encoded, (tuple, list)):
+        for item in encoded:
+            if isinstance(item, torch.Tensor):
+                return item
+
+    raise TypeError(
+        f"Could not extract feature tensor from SAE encode output of type {type(encoded)}"
+    )
 
 
-def encode_activations(sae, activations: torch.Tensor) -> torch.Tensor:
-    """
-    Encode activations through the SAE encoder.
+def _encode_once(sae: Any, batch: torch.Tensor) -> torch.Tensor:
+    if hasattr(sae, "encode"):
+        out = sae.encode(batch)
+        return _extract_feature_tensor(out)
 
-    Args:
-        sae: SAELens SAE object.
-        activations: (n_prompts, hidden_dim) tensor.
+    if hasattr(sae, "encoder"):
+        out = sae.encoder(batch)
+        return _extract_feature_tensor(out)
 
-    Returns:
-        Feature activations of shape (n_prompts, sae_width).
-    """
-    sae.eval()
-    with torch.no_grad():
-        feature_acts = sae.encode(activations.to(sae.device))
-    return feature_acts
+    if callable(sae):
+        out = sae(batch)
+        return _extract_feature_tensor(out)
 
-
-def decode_features(sae, feature_activations: torch.Tensor) -> torch.Tensor:
-    """
-    Decode SAE feature activations back to residual stream space.
-
-    Args:
-        sae: SAELens SAE object.
-        feature_activations: (n_prompts, sae_width) tensor.
-
-    Returns:
-        Reconstructed activations (n_prompts, hidden_dim).
-    """
-    sae.eval()
-    with torch.no_grad():
-        reconstructed = sae.decode(feature_activations)
-    return reconstructed
+    raise AttributeError(
+        "SAE object has neither .encode(), .encoder(), nor a callable forward path."
+    )
 
 
-def get_top_features(feature_activations: torch.Tensor, k: int = 50) -> List[int]:
-    """
-    Get indices of top-k features by mean activation magnitude.
+@torch.no_grad()
+def encode_activations(
+    sae: Any,
+    activations: torch.Tensor,
+    batch_size: int = 1024,
+) -> torch.Tensor:
+    x = _to_device_dtype(activations)
 
-    Args:
-        feature_activations: (n_prompts, sae_width) tensor.
-        k: Number of top features to return.
+    original_shape = tuple(x.shape)
+    if x.ndim < 2:
+        raise ValueError(f"Expected activations with ndim >= 2, got shape {original_shape}")
 
-    Returns:
-        List of feature indices sorted by mean activation (descending).
-    """
-    mean_acts = feature_activations.abs().mean(dim=0)  # (sae_width,)
-    top_k = torch.topk(mean_acts, min(k, len(mean_acts))).indices
-    return top_k.cpu().tolist()
+    hidden_dim = x.shape[-1]
+    x = x.reshape(-1, hidden_dim)
+
+    sae_device = None
+    if hasattr(sae, "parameters"):
+        try:
+            sae_device = next(sae.parameters()).device
+        except Exception:
+            sae_device = None
+
+    if sae_device is None:
+        sae_device = x.device
+
+    outputs = []
+    for start in range(0, x.shape[0], batch_size):
+        batch = x[start:start + batch_size].to(sae_device)
+        feats = _encode_once(sae, batch)
+        feats = feats.detach().to("cpu")
+        outputs.append(feats)
+
+    result = torch.cat(outputs, dim=0)
+
+    logger.info(
+        "Encoded activations: input_shape=%s flat_input=%s output_shape=%s",
+        original_shape,
+        tuple(x.shape),
+        tuple(result.shape),
+    )
+    return result

@@ -6,7 +6,7 @@ clean (English) vs. corrupted (LangX) patching.
 """
 
 import logging
-from typing import Dict, List, Optional
+from typing import Dict, List
 
 import numpy as np
 import pandas as pd
@@ -15,11 +15,36 @@ import torch
 logger = logging.getLogger(__name__)
 
 
+def _patch_suffix_inplace(target: torch.Tensor, source: torch.Tensor) -> None:
+    """
+    Patch the shared right-aligned suffix from source into target.
+    Assumes tensors have shape [batch, seq_len, hidden].
+    """
+    if target.ndim != 3 or source.ndim != 3:
+        raise ValueError(f"Expected 3D tensors, got {target.shape} and {source.shape}")
+
+    if target.shape[0] != source.shape[0] or target.shape[2] != source.shape[2]:
+        raise ValueError(f"Incompatible shapes for patching: {target.shape} vs {source.shape}")
+
+    shared_len = min(target.shape[1], source.shape[1])
+    target[:, -shared_len:, :] = source[:, -shared_len:, :]
+
+def _unwrap_saved(x):
+    return x.value if hasattr(x, "value") else x
+
 def _compute_refusal_activation(hidden: torch.Tensor, refusal_direction: np.ndarray) -> float:
-    """Compute dot product of hidden state with refusal direction."""
+    """Compute mean dot product of hidden states with refusal direction."""
     r = torch.tensor(refusal_direction, dtype=hidden.dtype, device=hidden.device)
     r = r / (r.norm() + 1e-12)
     return float((hidden @ r).mean().item())
+
+
+def _get_layers(lm):
+    """Return the transformer block list for different model wrappers."""
+    try:
+        return lm.model.layers
+    except AttributeError:
+        return lm.model.model.layers
 
 
 def run_attribution_patching(
@@ -66,11 +91,18 @@ def run_attribution_patching(
         tokenizer.pad_token = tokenizer.eos_token
     tokenizer.padding_side = "left"
 
-    lm = LanguageModel(model_name, device_map="auto", torch_dtype=torch.bfloat16)
-    try:
-        num_layers = lm.config.num_hidden_layers
-    except AttributeError:
-        num_layers = len(lm.model.layers)
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+
+    # Do not call lm.to(device) afterward; that can trigger meta-tensor issues.
+    lm = LanguageModel(
+        model_name,
+        device_map=device,
+        dtype=torch.float16,
+        dispatch=True,
+    )
+
+    layers = _get_layers(lm)
+    num_layers = len(layers)
 
     log_gpu_memory("attribution patching: model loaded")
 
@@ -83,63 +115,87 @@ def run_attribution_patching(
         langx_batch = langx_prompts[i : i + batch_size]
 
         en_inputs = tokenizer(
-            en_batch, return_tensors="pt", padding=True, truncation=True, max_length=2048
+            en_batch,
+            return_tensors="pt",
+            padding=True,
+            truncation=True,
+            max_length=2048,
         )
         langx_inputs = tokenizer(
-            langx_batch, return_tensors="pt", padding=True, truncation=True, max_length=2048
+            langx_batch,
+            return_tensors="pt",
+            padding=True,
+            truncation=True,
+            max_length=2048,
         )
 
-        # Step 1: Clean forward pass -- cache all activations
+        en_inputs = {k: v.to(device) for k, v in en_inputs.items()}
+        langx_inputs = {k: v.to(device) for k, v in langx_inputs.items()}
+
         clean_residuals = {}
         clean_attn_outs = {}
         clean_mlp_outs = {}
 
+        # Step 1: clean forward pass, cache activations
         with torch.no_grad():
-            with lm.trace(en_inputs["input_ids"].to(lm.device)) as tracer:
+            with lm.trace(**en_inputs):
+                layers = _get_layers(lm)
                 for l in range(num_layers):
-                    try:
-                        layer_obj = lm.model.layers[l]
-                    except AttributeError:
-                        layer_obj = lm.model.model.layers[l]
+                    layer_obj = layers[l]
 
-                    if "residual" in components:
-                        clean_residuals[l] = layer_obj.output[0].save()
+                    # IMPORTANT: save in forward order
+                    # self_attn -> mlp -> layer output
                     if "attn_out" in components:
                         try:
-                            clean_attn_outs[l] = layer_obj.self_attn.output[0].save()
-                        except AttributeError:
+                            attn_out = layer_obj.self_attn.output
+                            if isinstance(attn_out, tuple):
+                                attn_out = attn_out[0]
+                            clean_attn_outs[l] = attn_out.save()
+                        except Exception:
                             pass
+
                     if "mlp_out" in components:
                         try:
                             mlp_out = layer_obj.mlp.output
                             if isinstance(mlp_out, tuple):
                                 mlp_out = mlp_out[0]
                             clean_mlp_outs[l] = mlp_out.save()
-                        except AttributeError:
+                        except Exception:
                             pass
 
-        # Measure metric on clean run (metric_clean)
+                    if "residual" in components:
+                        try:
+                            residual_out = layer_obj.output
+                            if isinstance(residual_out, tuple):
+                                residual_out = residual_out[0]
+                            clean_residuals[l] = residual_out.save()
+                        except Exception:
+                            pass
+
+        # Clean metric
         with torch.no_grad():
-            with lm.trace(en_inputs["input_ids"].to(lm.device)) as tracer:
-                try:
-                    final_h_clean = lm.model.layers[-1].output[0][:, -1, :].save()
-                except AttributeError:
-                    final_h_clean = lm.model.model.layers[-1].output[0][:, -1, :].save()
+            with lm.trace(**en_inputs):
+                layers = _get_layers(lm)
+                final_out = layers[-1].output
+                if isinstance(final_out, tuple):
+                    final_out = final_out[0]
+                final_h_clean = final_out[:, -1, :].save()
 
-        metric_clean = _compute_refusal_activation(final_h_clean.value, refusal_direction)
+        metric_clean = _compute_refusal_activation(_unwrap_saved(final_h_clean), refusal_direction)
 
-        # Measure metric on corrupted run (metric_corrupted, no patching)
+        # Corrupted metric
         with torch.no_grad():
-            with lm.trace(langx_inputs["input_ids"].to(lm.device)) as tracer:
-                try:
-                    final_h_corrupted = lm.model.layers[-1].output[0][:, -1, :].save()
-                except AttributeError:
-                    final_h_corrupted = lm.model.model.layers[-1].output[0][:, -1, :].save()
+            with lm.trace(**langx_inputs):
+                layers = _get_layers(lm)
+                final_out = layers[-1].output
+                if isinstance(final_out, tuple):
+                    final_out = final_out[0]
+                final_h_corrupted = final_out[:, -1, :].save()
 
-        metric_corrupted = _compute_refusal_activation(final_h_corrupted.value, refusal_direction)
+        metric_corrupted = _compute_refusal_activation(_unwrap_saved(final_h_corrupted), refusal_direction)
         baseline_diff = metric_clean - metric_corrupted
 
-        # Step 2: Patch each layer
+        # Step 2: patch each layer/component into corrupted run
         for patch_layer in range(num_layers):
             for comp in components:
                 if comp == "residual" and patch_layer not in clean_residuals:
@@ -150,35 +206,41 @@ def run_attribution_patching(
                     continue
 
                 with torch.no_grad():
-                    with lm.trace(langx_inputs["input_ids"].to(lm.device)) as tracer:
-                        try:
-                            layer_obj = lm.model.layers[patch_layer]
-                        except AttributeError:
-                            layer_obj = lm.model.model.layers[patch_layer]
+                    with lm.trace(**langx_inputs):
+                        layers = _get_layers(lm)
+                        layer_obj = layers[patch_layer]
 
                         if comp == "residual":
-                            layer_obj.output[0][:] = clean_residuals[patch_layer].value
+                            residual_out = layer_obj.output
+                            if isinstance(residual_out, tuple):
+                                residual_out = residual_out[0]
+                            _patch_suffix_inplace(residual_out, _unwrap_saved(clean_residuals[patch_layer]))
+
                         elif comp == "attn_out":
-                            layer_obj.self_attn.output[0][:] = clean_attn_outs[patch_layer].value
+                            attn_out = layer_obj.self_attn.output
+                            if isinstance(attn_out, tuple):
+                                attn_out = attn_out[0]
+                            _patch_suffix_inplace(attn_out, _unwrap_saved(clean_attn_outs[patch_layer]))
+
                         elif comp == "mlp_out":
                             mlp_out = layer_obj.mlp.output
                             if isinstance(mlp_out, tuple):
-                                layer_obj.mlp.output[0][:] = clean_mlp_outs[patch_layer].value
-                            else:
-                                layer_obj.mlp.output[:] = clean_mlp_outs[patch_layer].value
+                                mlp_out = mlp_out[0]
+                            _patch_suffix_inplace(mlp_out, _unwrap_saved(clean_mlp_outs[patch_layer]))
 
-                        try:
-                            final_h_patched = lm.model.layers[-1].output[0][:, -1, :].save()
-                        except AttributeError:
-                            final_h_patched = lm.model.model.layers[-1].output[0][:, -1, :].save()
+                        final_out = layers[-1].output
+                        if isinstance(final_out, tuple):
+                            final_out = final_out[0]
+                        final_h_patched = final_out[:, -1, :].save()
 
-                metric_patched = _compute_refusal_activation(final_h_patched.value, refusal_direction)
+                metric_patched = _compute_refusal_activation(_unwrap_saved(final_h_patched), refusal_direction)
+
                 if abs(baseline_diff) > 1e-6:
                     restoration = (metric_patched - metric_corrupted) / baseline_diff
                 else:
                     restoration = 0.0
 
-                restoration_scores[(patch_layer, comp)].append(restoration)
+                restoration_scores[(patch_layer, comp)].append(float(restoration))
 
         logger.info(
             f"Batch {i // batch_size + 1}/{(len(en_prompts) + batch_size - 1) // batch_size} done."
@@ -191,14 +253,16 @@ def run_attribution_patching(
     for (layer, comp), scores in restoration_scores.items():
         if not scores:
             continue
-        rows.append({
-            "layer": layer,
-            "component": comp,
-            "language": language,
-            "tier": tier,
-            "mean_restoration": round(float(np.mean(scores)), 4),
-            "std_restoration": round(float(np.std(scores)), 4),
-        })
+        rows.append(
+            {
+                "layer": layer,
+                "component": comp,
+                "language": language,
+                "tier": tier,
+                "mean_restoration": round(float(np.mean(scores)), 4),
+                "std_restoration": round(float(np.std(scores)), 4),
+            }
+        )
 
     return pd.DataFrame(rows)
 
