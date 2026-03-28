@@ -12,7 +12,6 @@ build/
 venv/
 data/activations/
 results/
-figures/
 trained_saes/
 wandb/
 .ipynb_checkpoints
