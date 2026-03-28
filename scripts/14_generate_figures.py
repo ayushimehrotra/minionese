@@ -173,7 +173,7 @@ def main():
 
     # --- Figure 9: SAE features ---
     sae_df = _load_csv_if_exists(
-        results_dir / "sae_features" / "top_features_ar_layer15.csv", "SAE feature data", logger
+        results_dir / "sae_features" / "top_features_ar_layer23.csv", "SAE feature data", logger
     )
     if sae_df.empty:
         # Try other naming conventions
