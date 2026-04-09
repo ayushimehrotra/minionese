@@ -116,23 +116,30 @@ def _extract_feature_tensor(encoded: Any) -> torch.Tensor:
     if isinstance(encoded, torch.Tensor):
         return encoded
 
-    if hasattr(encoded, "features"):
-        feats = getattr(encoded, "features")
+    # Prefer pre_acts (full dense feature activations) over sparse top-k representations.
+    # sparsify EncoderOutput uses pre_acts for the full pre-activation vector.
+    if hasattr(encoded, "pre_acts"):
+        feats = getattr(encoded, "pre_acts")
         if isinstance(feats, torch.Tensor):
             return feats
 
-    if hasattr(encoded, "acts"):
-        feats = getattr(encoded, "acts")
-        if isinstance(feats, torch.Tensor):
-            return feats
+    # Sparse representation: reconstruct dense from top_acts + top_indices
+    if hasattr(encoded, "top_acts") and hasattr(encoded, "top_indices"):
+        top_acts = getattr(encoded, "top_acts")
+        top_indices = getattr(encoded, "top_indices")
+        if isinstance(top_acts, torch.Tensor) and isinstance(top_indices, torch.Tensor):
+            # We don't know num_latents here, so return the sparse pair as a fallback
+            # (will only be used if pre_acts is not available)
+            return top_acts
 
-    if hasattr(encoded, "latents"):
-        feats = getattr(encoded, "latents")
-        if isinstance(feats, torch.Tensor):
-            return feats
+    for attr in ("features", "acts", "latents", "latent_acts"):
+        if hasattr(encoded, attr):
+            feats = getattr(encoded, attr)
+            if isinstance(feats, torch.Tensor):
+                return feats
 
     if isinstance(encoded, dict):
-        for key in ("features", "acts", "codes", "latent_acts", "z", "latents"):
+        for key in ("pre_acts", "features", "acts", "codes", "latent_acts", "z", "latents"):
             if key in encoded and isinstance(encoded[key], torch.Tensor):
                 return encoded[key]
 

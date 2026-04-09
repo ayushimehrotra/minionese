@@ -40,7 +40,7 @@ def find_token_positions(
         Dict mapping position_name -> token_index (0-based, from start of sequence).
         Keys: "last_instruction", "last_post_instruction", "last"
     """
-    token_ids = tokenizer.encode(formatted_prompt, add_special_tokens=False)
+    token_ids = tokenizer.encode(formatted_prompt, add_special_tokens=True)
     n = len(token_ids)
 
     if n == 0:

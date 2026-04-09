@@ -92,13 +92,18 @@ def plot_attribution_map(
 
         components = tier_data["component"].unique() if "component" in tier_data.columns else ["residual"]
 
+        # Support both Analysis A (mean_delta) and Analysis B (mean_restoration) column names
+        score_col = "mean_restoration" if "mean_restoration" in tier_data.columns else "mean_delta"
+        std_col = "std_restoration" if "std_restoration" in tier_data.columns else "std_delta"
+        y_label = "Restoration Score" if score_col == "mean_restoration" else "Raw Delta"
+
         for comp in sorted(components):
             comp_data = tier_data[tier_data["component"] == comp].sort_values("layer")
             color = COMPONENT_COLORS.get(comp, "black")
 
             ax.plot(
                 comp_data["layer"],
-                comp_data["mean_restoration"],
+                comp_data[score_col],
                 label=comp,
                 color=color,
                 linewidth=1.2,
@@ -107,11 +112,11 @@ def plot_attribution_map(
             )
 
             # Shade std if available
-            if "std_restoration" in comp_data.columns:
+            if std_col in comp_data.columns:
                 ax.fill_between(
                     comp_data["layer"],
-                    comp_data["mean_restoration"] - comp_data["std_restoration"],
-                    comp_data["mean_restoration"] + comp_data["std_restoration"],
+                    comp_data[score_col] - comp_data[std_col],
+                    comp_data[score_col] + comp_data[std_col],
                     color=color,
                     alpha=0.15,
                 )
@@ -119,7 +124,7 @@ def plot_attribution_map(
         ax.axhline(y=0, color="gray", linestyle="--", linewidth=0.8, alpha=0.6)
         ax.axhline(y=1, color="gray", linestyle=":", linewidth=0.8, alpha=0.6)
         ax.set_xlabel("Layer", fontsize=FONT_SIZE)
-        ax.set_ylabel("Restoration Score", fontsize=FONT_SIZE)
+        ax.set_ylabel(y_label, fontsize=FONT_SIZE)
         ax.set_title(f"Tier: {tier}", fontsize=FONT_SIZE)
         ax.legend(fontsize=FONT_SIZE - 2)
         ax.grid(True, alpha=0.3)

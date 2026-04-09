@@ -107,17 +107,61 @@ def extract_activations(
         )
         input_ids = inputs["input_ids"]
 
-        # Find token positions for each prompt in the batch
+        # Find token positions directly from the actual padded token IDs so that
+        # the positions are always consistent with what the model sees.
         pos_indices: Dict[str, List[int]] = {pos: [] for pos in token_positions}
-        for prompt in batch_prompts:
-            pos_map = find_token_positions(tokenizer, prompt, model_name)
-            # Adjust for left-padding: find actual sequence length
-            seq_len = input_ids.shape[1]
+        seq_len = input_ids.shape[1]
+        pad_id = tokenizer.pad_token_id
+        for sample_idx in range(len(batch_prompts)):
+            ids = input_ids[sample_idx]   # (seq_len,) — includes left-pad
+            pad_count = int((ids == pad_id).sum().item())
+            # Indices of actual (non-pad) tokens in the padded sequence
+            first_real = pad_count          # index of first real token
+            last_real = seq_len - 1         # index of last token (always real after pad)
+
+            pos_map: Dict[str, int] = {}
+
+            # last_instruction: last token of user message, i.e., token just before
+            # the LAST <|eot_id|> in the sequence.  We search the padded IDs directly.
+            model_lower = model_name.lower()
+            if "gemma" in model_lower:
+                end_inst_ids = tokenizer.convert_tokens_to_ids(["<end_of_turn>"])
+            elif "qwen" in model_lower:
+                end_inst_ids = tokenizer.convert_tokens_to_ids(["<|im_end|>"])
+            else:
+                end_inst_ids = tokenizer.convert_tokens_to_ids(["<|eot_id|>"])
+            end_inst_ids = [i for i in end_inst_ids if i != tokenizer.unk_token_id]
+
+            last_eot_pos = -1
+            for t in range(last_real, first_real - 1, -1):
+                if ids[t].item() in end_inst_ids:
+                    last_eot_pos = t
+                    break
+            pos_map["last_instruction"] = max(first_real, last_eot_pos - 1) if last_eot_pos > first_real else last_real
+
+            # last_post_instruction: last token of the assistant-turn header
+            # (<|end_header_id|> for Llama, <start_of_turn>model for Gemma, etc.)
+            if "gemma" in model_lower:
+                asst_end_ids = tokenizer.convert_tokens_to_ids(["<start_of_turn>"])
+            elif "qwen" in model_lower:
+                asst_end_ids = tokenizer.convert_tokens_to_ids(["<|im_start|>"])
+            else:
+                asst_end_ids = tokenizer.convert_tokens_to_ids(["<|end_header_id|>"])
+            asst_end_ids = [i for i in asst_end_ids if i != tokenizer.unk_token_id]
+
+            last_asst_end = -1
+            for t in range(last_real, first_real - 1, -1):
+                if ids[t].item() in asst_end_ids:
+                    last_asst_end = t
+                    break
+            pos_map["last_post_instruction"] = last_asst_end if last_asst_end >= 0 else last_real
+
+            # last: the final real token in the padded sequence
+            pos_map["last"] = last_real
+
             for pos_name in token_positions:
-                raw_idx = pos_map.get(pos_name, -1)
-                # Map to padded sequence index
-                adjusted_idx = min(raw_idx, seq_len - 1)
-                pos_indices[pos_name].append(adjusted_idx)
+                idx = pos_map.get(pos_name, last_real)
+                pos_indices[pos_name].append(min(idx, seq_len - 1))
 
         # NNsight trace
         saved = {}
