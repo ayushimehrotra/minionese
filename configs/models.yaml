@@ -28,6 +28,14 @@ target_models:
     sae_source: "saelens"
     sae_pretrained: true
     critical_layer_range: [10, 20]
+  aya:
+    name: "CohereForAI/aya-expanse-32b"
+    num_layers: 64
+    hidden_dim: 8192
+    num_heads: 64
+    sae_suite: null
+    sae_pretrained: false
+    critical_layer_range: [20, 45]
 
 judge_models:
   primary:

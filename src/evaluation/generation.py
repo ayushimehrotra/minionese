@@ -22,7 +22,8 @@ def generate_responses(
     batch_size: int = 8,
     output_path: Optional[str] = None,
     prompt_ids: Optional[List[str]] = None,
-    hf_token: Optional[str] = None,   # add this
+    hf_token: Optional[str] = None,
+    use_vllm: bool = False,
 ) -> List[dict]:
     """
     Run prompts through a causal language model and collect responses.
@@ -42,7 +43,21 @@ def generate_responses(
     logger.info(f"HF token present? {hf_token is not None}")
     if hf_token is not None:
         logger.info(f"HF token prefix: {hf_token[:8]}")
-    
+
+    if hf_token:
+        os.environ["HF_TOKEN"] = hf_token
+        os.environ["HUGGING_FACE_HUB_TOKEN"] = hf_token
+
+    if use_vllm:
+        return _generate_responses_vllm(
+            model_name=model_name,
+            prompts=prompts,
+            max_new_tokens=max_new_tokens,
+            temperature=temperature,
+            output_path=output_path,
+            prompt_ids=prompt_ids,
+        )
+
     import torch
     from transformers import AutoModelForCausalLM, AutoTokenizer
 
@@ -160,6 +175,84 @@ def generate_responses(
 
     clear_gpu_memory()
     logger.info(f"Generation complete. Total responses: {len(all_results)}.")
+    return all_results
+
+
+def _generate_responses_vllm(
+    model_name: str,
+    prompts: List[str],
+    max_new_tokens: int = 512,
+    temperature: float = 0.0,
+    output_path: Optional[str] = None,
+    prompt_ids: Optional[List[str]] = None,
+) -> List[dict]:
+    """vLLM-backed generation — loads the model once, batches all prompts."""
+    from vllm import LLM, SamplingParams
+
+    if prompt_ids is None:
+        prompt_ids = [f"prompt_{i}" for i in range(len(prompts))]
+
+    # Resume support: skip already-completed prompt IDs.
+    completed_ids: set = set()
+    if output_path is not None:
+        Path(output_path).parent.mkdir(parents=True, exist_ok=True)
+        if Path(output_path).exists():
+            with open(output_path, "r", encoding="utf-8") as f:
+                for line in f:
+                    try:
+                        completed_ids.add(json.loads(line).get("prompt_id", ""))
+                    except json.JSONDecodeError:
+                        pass
+        if completed_ids:
+            logger.info(f"Resuming (vLLM): {len(completed_ids)} prompts already completed.")
+
+    pending_prompts = []
+    pending_ids = []
+    for pid, prompt in zip(prompt_ids, prompts):
+        if pid not in completed_ids:
+            pending_prompts.append(prompt)
+            pending_ids.append(pid)
+
+    all_results: List[dict] = []
+
+    if not pending_prompts:
+        logger.info("All prompts already completed; nothing to do.")
+        return all_results
+
+    logger.info(f"Loading model via vLLM: {model_name} ({len(pending_prompts)} prompts)")
+    llm = LLM(
+        model=model_name,
+        dtype="bfloat16",
+        trust_remote_code=True,
+        max_model_len=4096,
+    )
+
+    sampling_params = SamplingParams(
+        temperature=temperature,
+        max_tokens=max_new_tokens,
+    )
+
+    t0 = time.time()
+    outputs = llm.generate(pending_prompts, sampling_params)
+    elapsed = time.time() - t0
+    logger.info(f"vLLM generated {len(outputs)} responses in {elapsed:.1f}s.")
+
+    for pid, prompt, output in zip(pending_ids, pending_prompts, outputs):
+        completion = output.outputs[0]
+        result = {
+            "prompt_id": pid,
+            "model": model_name,
+            "prompt": prompt,
+            "response": completion.text,
+            "num_tokens_generated": len(completion.token_ids),
+            "generation_time_s": round(elapsed / len(pending_prompts), 3),
+        }
+        all_results.append(result)
+        if output_path is not None:
+            with open(output_path, "a", encoding="utf-8") as f:
+                f.write(json.dumps(result, ensure_ascii=False) + "\n")
+
+    logger.info(f"Generation complete (vLLM). Total responses: {len(all_results)}.")
     return all_results
 
 

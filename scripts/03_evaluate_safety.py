@@ -35,6 +35,8 @@ def parse_args():
     parser.add_argument("--skip-llamaguard", action="store_true",
                         help="Skip LlamaGuard (use WildGuard only).")
     parser.add_argument("--batch-size", type=int, default=8)
+    parser.add_argument("--use-vllm", action="store_true",
+                        help="Use vLLM for faster WildGuard inference.")
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--log-level", default="INFO")
 
@@ -137,7 +139,8 @@ def main():
         all_responses,
         batch_size=args.batch_size,
         cache_path=cache_path,
-        hf_token=hf_token,   # NEW
+        hf_token=hf_token,
+        use_vllm=args.use_vllm,
     )
 
     # LlamaGuard scoring (optional)

@@ -23,8 +23,8 @@ from src.utils.reproducibility import setup_reproducibility
 
 def parse_args():
     parser = argparse.ArgumentParser(description="Run model generation.")
-    parser.add_argument("--model", required=True, choices=["llama", "gemma", "qwen"],
-                        help="Model key (llama, gemma, qwen).")
+    parser.add_argument("--model", required=True, choices=["llama", "gemma", "qwen", "aya"],
+                        help="Model key (llama, gemma, qwen, aya).")
     parser.add_argument("--dataset-dir", default="dataset/")
     parser.add_argument("--output-dir", default="results/generations/")
     parser.add_argument("--config", default="configs/experiment.yaml")
@@ -34,6 +34,8 @@ def parse_args():
     parser.add_argument("--max-new-tokens", type=int, default=512)
     parser.add_argument("--hf-token", default=None,
                         help="Hugging Face token. If omitted, uses HF_TOKEN env var or prompts securely.")
+    parser.add_argument("--use-vllm", action="store_true",
+                        help="Use vLLM for faster generation (recommended for large models).")
     parser.add_argument("--dry-run", action="store_true",
                         help="Load dataset and validate without running inference.")
     parser.add_argument("--log-level", default="INFO")
@@ -124,7 +126,8 @@ def main():
             batch_size=args.batch_size,
             output_path=str(output_file),
             prompt_ids=prompt_ids,
-            hf_token=hf_token,   # <-- ADD THIS LINE
+            hf_token=hf_token,
+            use_vllm=args.use_vllm,
         )
 
         logger.info(f"Done: {pert}/{lang} -> {len(results)} responses saved.")
