@@ -369,6 +369,12 @@ def format_for_model(
                 add_generation_prompt=True,
             )
         except Exception as e:
+            if "cohere" in model_name.lower() or "aya" in model_name.lower():
+                return (
+                    "<BOS_TOKEN><|START_OF_TURN_TOKEN|><|USER_TOKEN|>"
+                    + prompt
+                    + "<|END_OF_TURN_TOKEN|><|START_OF_TURN_TOKEN|><|CHATBOT_TOKEN|>"
+                )
             logger.warning(f"Chat template error for prompt '{prompt[:50]}...': {e}")
             return prompt
 

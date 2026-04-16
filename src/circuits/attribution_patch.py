@@ -75,6 +75,8 @@ def _find_positions_in_batch(
         eot_token_ids = set(tokenizer.convert_tokens_to_ids(["<end_of_turn>"]))
     elif "qwen" in model_lower:
         eot_token_ids = set(tokenizer.convert_tokens_to_ids(["<|im_end|>"]))
+    elif "aya" in model_lower or "cohere" in model_lower:
+        eot_token_ids = set(tokenizer.convert_tokens_to_ids(["<|END_OF_TURN_TOKEN|>"]))
     else:
         eot_token_ids = set(tokenizer.convert_tokens_to_ids(["<|eot_id|>"]))
     # Remove unk

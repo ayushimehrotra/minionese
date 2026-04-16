@@ -1,6 +1,16 @@
 #!/usr/bin/env python3
 """
-Script 04: Extract Activations
+Script 03: Extract Activations
+
+Extract and cache residual/attention/MLP activations for ALL languages,
+ALL models. No coherence filtering: we need incoherent-tier activations
+to show subspace degeneration (a core finding).
+
+Usage:
+    python scripts/03_extract_activations.py \
+        --model llama \
+        --dataset-dir dataset/ \
+        --output-dir data/activations/
 """
 
 import argparse
@@ -21,8 +31,8 @@ from src.utils.reproducibility import setup_reproducibility
 
 
 def parse_args():
-    parser = argparse.ArgumentParser(description="Extract model activations.")
-    parser.add_argument("--model", required=True, choices=["llama", "gemma", "qwen"])
+    parser = argparse.ArgumentParser(description="Extract model activations (all languages).")
+    parser.add_argument("--model", required=True, choices=["llama", "qwen", "aya"])
     parser.add_argument("--dataset-dir", default="dataset/")
     parser.add_argument("--output-dir", default="data/activations/")
     parser.add_argument("--positions", nargs="+",
@@ -35,24 +45,20 @@ def parse_args():
     parser.add_argument("--languages", nargs="+", default=None)
     parser.add_argument("--batch-size", type=int, default=4)
     parser.add_argument("--dtype", default="float16", choices=["float32", "float16"])
-    parser.add_argument("--hf-token", default=None,
-                        help="Hugging Face token. If omitted, the script will use env vars or prompt securely.")
-    parser.add_argument("--skip-existing", action="store_true", default=True,
-                        help="Skip if cached file already exists.")
+    parser.add_argument("--hf-token", default=None)
+    parser.add_argument("--skip-existing", action="store_true", default=True)
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--log-level", default="INFO")
     return parser.parse_args()
 
 
-def resolve_hf_token(cli_token: str | None) -> str | None:
+def resolve_hf_token(cli_token):
     if cli_token:
         return cli_token.strip()
-
-    for env_name in ("HUGGINGFACE_HUB_TOKEN", "HF_TOKEN", "HF_HUB_TOKEN"):
+    for env_name in ("HF_TOKEN", "HUGGINGFACE_HUB_TOKEN", "HF_HUB_TOKEN"):
         value = os.environ.get(env_name)
         if value and value.strip():
             return value.strip()
-
     token = getpass("Enter your Hugging Face token (input hidden): ").strip()
     return token or None
 
@@ -73,18 +79,13 @@ def main():
         logger.error("No Hugging Face token provided.")
         sys.exit(1)
 
-    # Make the token available to transformers / huggingface_hub / nested loads in extract.py
-    os.environ["HUGGINGFACE_HUB_TOKEN"] = hf_token
     os.environ["HF_TOKEN"] = hf_token
+    os.environ["HUGGINGFACE_HUB_TOKEN"] = hf_token
     os.environ["HF_HUB_TOKEN"] = hf_token
 
-    # Parse layers
-    if args.layers == "all":
-        layers = "all"
-    else:
-        layers = [int(l) for l in args.layers.split(",")]
+    layers = "all" if args.layers == "all" else [int(l) for l in args.layers.split(",")]
 
-    logger.info(f"Loading dataset from {args.dataset_dir}...")
+    logger.info(f"Loading dataset from {args.dataset_dir} (ALL languages, no coherence filter)...")
     df = load_dataset(
         dataset_dir=args.dataset_dir,
         perturbations=args.perturbations,
@@ -146,7 +147,7 @@ def main():
             logger.exception(f"Extraction failed for {pert}/{lang}")
             continue
 
-    logger.info("Activation extraction pipeline complete.")
+    logger.info("Activation extraction complete.")
 
 
 if __name__ == "__main__":

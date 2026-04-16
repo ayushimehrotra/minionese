@@ -16,11 +16,13 @@ logger = logging.getLogger(__name__)
 LLAMA_END_INST_TOKENS = ["[/INST]", "<|eot_id|>"]
 GEMMA_END_INST_TOKENS = ["<end_of_turn>"]
 QWEN_END_INST_TOKENS = ["<|im_end|>"]
+AYA_END_INST_TOKENS = ["<|END_OF_TURN_TOKEN|>"]
 
 # Beginning-of-assistant-turn markers (after these, generation starts)
 LLAMA_ASST_START = ["<|start_header_id|>assistant<|end_header_id|>"]
 GEMMA_ASST_START = ["<start_of_turn>model"]
 QWEN_ASST_START = ["<|im_start|>assistant"]
+AYA_ASST_START = ["<|START_OF_TURN_TOKEN|>"]
 
 
 def find_token_positions(
@@ -54,6 +56,9 @@ def find_token_positions(
     elif "qwen" in model_lower:
         end_inst_markers = QWEN_END_INST_TOKENS
         asst_start_markers = QWEN_ASST_START
+    elif "aya" in model_lower or "cohere" in model_lower:
+        end_inst_markers = AYA_END_INST_TOKENS
+        asst_start_markers = AYA_ASST_START
     else:
         # Default: Llama-style
         end_inst_markers = LLAMA_END_INST_TOKENS

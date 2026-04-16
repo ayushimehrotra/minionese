@@ -128,6 +128,8 @@ def extract_activations(
                 end_inst_ids = tokenizer.convert_tokens_to_ids(["<end_of_turn>"])
             elif "qwen" in model_lower:
                 end_inst_ids = tokenizer.convert_tokens_to_ids(["<|im_end|>"])
+            elif "aya" in model_lower or "cohere" in model_lower:
+                end_inst_ids = tokenizer.convert_tokens_to_ids(["<|END_OF_TURN_TOKEN|>"])
             else:
                 end_inst_ids = tokenizer.convert_tokens_to_ids(["<|eot_id|>"])
             end_inst_ids = [i for i in end_inst_ids if i != tokenizer.unk_token_id]
@@ -145,6 +147,8 @@ def extract_activations(
                 asst_end_ids = tokenizer.convert_tokens_to_ids(["<start_of_turn>"])
             elif "qwen" in model_lower:
                 asst_end_ids = tokenizer.convert_tokens_to_ids(["<|im_start|>"])
+            elif "aya" in model_lower or "cohere" in model_lower:
+                asst_end_ids = tokenizer.convert_tokens_to_ids(["<|START_OF_TURN_TOKEN|>"])
             else:
                 asst_end_ids = tokenizer.convert_tokens_to_ids(["<|end_header_id|>"])
             asst_end_ids = [i for i in asst_end_ids if i != tokenizer.unk_token_id]
@@ -292,4 +296,6 @@ def _model_short_name(model_name: str) -> str:
         return "gemma"
     if "qwen" in name:
         return "qwen"
+    if "aya" in name or "cohere" in name:
+        return "aya"
     return name[:20].replace("-", "_")

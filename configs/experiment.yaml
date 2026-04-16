@@ -47,3 +47,9 @@ interventions:
   subspace_projection:
     train_pairs_per_tier: 50
     regularization: [0.001, 0.01, 0.1]
+
+coherence:
+  langid_confidence_threshold: 0.3
+  unicode_validity_threshold: 0.8
+  min_response_length: 20
+  min_coherence_for_asr: 0.5

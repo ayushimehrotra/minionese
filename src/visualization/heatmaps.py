@@ -101,6 +101,7 @@ def plot_asr_heatmap(
     output_path: str,
     title: str = "Attack Success Rate",
     figsize: tuple = DOUBLE_COL,
+    coherence_data: Optional[pd.DataFrame] = None,
 ) -> None:
     """
     Language x Perturbation heatmap colored by ASR.
@@ -110,6 +111,7 @@ def plot_asr_heatmap(
         output_path: Output file path (without extension).
         title: Plot title.
         figsize: Figure size.
+        coherence_data: Optional coherence table; collapse cells are grayed out.
     """
     _apply_style()
 
@@ -125,6 +127,23 @@ def plot_asr_heatmap(
         index="language", columns="perturbation", values="asr_wildguard", aggfunc="mean"
     )
 
+    # Build collapse mask if coherence data supplied
+    collapse_mask = pd.DataFrame(False, index=pivot.index, columns=pivot.columns)
+    if coherence_data is not None and not coherence_data.empty and "regime" in coherence_data.columns:
+        for _, row in coherence_data.iterrows():
+            lang = row.get("language")
+            pert = row.get("perturbation")
+            if lang in collapse_mask.index and pert in collapse_mask.columns:
+                if row.get("regime") == "collapse":
+                    collapse_mask.loc[lang, pert] = True
+
+    # Annotate N/A for collapse cells
+    annot = pivot.copy().applymap(lambda v: f"{v:.2f}" if not np.isnan(v) else "")
+    for lang in collapse_mask.index:
+        for pert in collapse_mask.columns:
+            if collapse_mask.loc[lang, pert]:
+                annot.loc[lang, pert] = "N/A"
+
     fig, ax = plt.subplots(figsize=figsize)
     sns.heatmap(
         pivot,
@@ -132,15 +151,173 @@ def plot_asr_heatmap(
         cmap="Reds",
         vmin=0.0,
         vmax=1.0,
-        annot=True,
-        fmt=".2f",
+        annot=annot,
+        fmt="",
         annot_kws={"size": FONT_SIZE - 2},
         cbar_kws={"label": "ASR"},
+        mask=collapse_mask.values,
     )
+    # Gray out collapse cells
+    if collapse_mask.values.any():
+        gray_data = pivot.copy()
+        gray_data[:] = 0.5
+        sns.heatmap(
+            gray_data,
+            ax=ax,
+            cmap=["#cccccc"],
+            annot=annot,
+            fmt="",
+            annot_kws={"size": FONT_SIZE - 2},
+            mask=~collapse_mask.values,
+            cbar=False,
+        )
     ax.set_title(title, fontsize=FONT_SIZE)
     ax.set_xlabel("Perturbation Type", fontsize=FONT_SIZE)
     ax.set_ylabel("Language", fontsize=FONT_SIZE)
     plt.xticks(rotation=30, ha="right")
+    plt.tight_layout()
+    _save_figure(fig, output_path)
+
+
+def plot_coherence_heatmap(
+    coherence_df: pd.DataFrame,
+    output_path: str,
+    title: str = "Generation Coherence Rate",
+    figsize: tuple = (10, 4),
+) -> None:
+    """
+    One subplot per model: language (y) x perturbation (x), colored by coherence_rate.
+    Tier boundaries are annotated with horizontal lines.
+
+    Args:
+        coherence_df: DataFrame with columns: model, language, perturbation, coherence_rate.
+        output_path: Output file path (without extension).
+        title: Figure title.
+        figsize: Overall figure size.
+    """
+    _apply_style()
+
+    if coherence_df.empty:
+        logger.warning("No data to plot coherence heatmap.")
+        return
+
+    models = sorted(coherence_df["model"].unique()) if "model" in coherence_df.columns else ["all"]
+    n_models = len(models)
+    fig, axes = plt.subplots(1, n_models, figsize=figsize, squeeze=False)
+
+    # Build ordered language list from tier definitions
+    ordered_langs = []
+    for tier_langs in TIER_ORDER.values():
+        ordered_langs.extend(tier_langs)
+
+    for col_idx, model in enumerate(models):
+        ax = axes[0][col_idx]
+        subset = coherence_df[coherence_df["model"] == model] if "model" in coherence_df.columns else coherence_df
+        if subset.empty:
+            ax.set_visible(False)
+            continue
+
+        pivot = subset.pivot_table(
+            index="language", columns="perturbation", values="coherence_rate", aggfunc="mean"
+        )
+
+        # Reorder rows by tier
+        present = [l for l in ordered_langs if l in pivot.index]
+        rest = [l for l in pivot.index if l not in present]
+        pivot = pivot.reindex(present + rest)
+
+        sns.heatmap(
+            pivot,
+            ax=ax,
+            cmap="viridis",
+            vmin=0.0,
+            vmax=1.0,
+            annot=False,
+            cbar=col_idx == n_models - 1,
+            cbar_kws={"label": "Coherence Rate"} if col_idx == n_models - 1 else {},
+        )
+        ax.set_title(model, fontsize=FONT_SIZE)
+        ax.set_xlabel("Perturbation" if col_idx == n_models // 2 else "", fontsize=FONT_SIZE)
+        ax.set_ylabel("Language" if col_idx == 0 else "", fontsize=FONT_SIZE)
+
+        # Annotate tier boundaries (horizontal lines)
+        lang_order = list(pivot.index)
+        pos = 0
+        for tier_langs in TIER_ORDER.values():
+            count = sum(1 for l in tier_langs if l in lang_order)
+            pos += count
+            if 0 < pos < len(lang_order):
+                ax.axhline(y=pos, color="white", linewidth=1.5, linestyle="--")
+
+        plt.setp(ax.get_xticklabels(), rotation=30, ha="right", fontsize=FONT_SIZE - 2)
+        plt.setp(ax.get_yticklabels(), fontsize=FONT_SIZE - 2)
+
+    fig.suptitle(title, fontsize=FONT_SIZE + 1)
+    plt.tight_layout()
+    _save_figure(fig, output_path)
+
+
+def plot_regime_comparison(
+    coherence_df: pd.DataFrame,
+    output_path: str,
+    title: str = "Regime Distribution by Model and Tier",
+    figsize: tuple = DOUBLE_COL,
+) -> None:
+    """
+    Grouped stacked bar chart: fraction of languages in refuse/comply/collapse per (model, tier).
+
+    Args:
+        coherence_df: DataFrame with columns: model, tier, regime.
+        output_path: Output file path (without extension).
+        title: Plot title.
+        figsize: Figure size.
+    """
+    _apply_style()
+
+    if coherence_df.empty:
+        logger.warning("No data to plot regime comparison.")
+        return
+
+    required = {"regime"}
+    if not required.issubset(coherence_df.columns):
+        logger.warning(f"Missing columns for regime comparison: {required - set(coherence_df.columns)}")
+        return
+
+    group_cols = [c for c in ["model", "tier"] if c in coherence_df.columns]
+    if not group_cols:
+        logger.warning("Need at least one of 'model', 'tier' columns.")
+        return
+
+    counts = coherence_df.groupby(group_cols + ["regime"]).size().reset_index(name="count")
+    totals = counts.groupby(group_cols)["count"].transform("sum")
+    counts["fraction"] = counts["count"] / totals
+
+    regimes = ["refuse", "comply", "collapse"]
+    colors = {"refuse": "#2ecc71", "comply": "#e74c3c", "collapse": "#95a5a6"}
+
+    pivot = counts.pivot_table(
+        index=group_cols, columns="regime", values="fraction", aggfunc="sum"
+    ).fillna(0.0)
+    for r in regimes:
+        if r not in pivot.columns:
+            pivot[r] = 0.0
+    pivot = pivot[regimes]
+
+    fig, ax = plt.subplots(figsize=figsize)
+    x = np.arange(len(pivot))
+    bottom = np.zeros(len(pivot))
+    for regime in regimes:
+        vals = pivot[regime].values
+        ax.bar(x, vals, bottom=bottom, label=regime, color=colors[regime], width=0.6)
+        bottom += vals
+
+    labels = [" / ".join(str(v) for v in (idx if isinstance(idx, tuple) else (idx,))) for idx in pivot.index]
+    ax.set_xticks(x)
+    ax.set_xticklabels(labels, rotation=30, ha="right", fontsize=FONT_SIZE - 2)
+    ax.set_ylabel("Fraction of Languages", fontsize=FONT_SIZE)
+    ax.set_ylim(0, 1)
+    ax.legend(title="Regime", fontsize=FONT_SIZE - 2, loc="upper right")
+    ax.set_title(title, fontsize=FONT_SIZE)
     plt.tight_layout()
     _save_figure(fig, output_path)
 

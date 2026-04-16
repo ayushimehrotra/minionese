@@ -1,29 +1,28 @@
 #!/usr/bin/env python3
 """
-Script 08: Attribution Patching
+Script 05: Attribution Patching
 
 Runs two complementary analyses (per the paper design):
 
-  Analysis A  (normalize=False):
+  Analysis A (normalize=False):
     For every (EN, LangX) harmful pair, compute the raw shift in the
     refusal-direction projection when EN activations at t_inst are patched
-    into layer L of the corrupted (LangX) run.  No division by
-    baseline_diff, so near-zero baseline is never a problem.
-    Used for critical layer identification.
+    into layer L of the corrupted (LangX) run. Used for critical layer
+    identification.
 
-  Analysis B  (normalize=True):
-    Filters to behaviorally-contrastive pairs (EN refused, LangX complied)
-    and computes the normalized restoration score.  Reports how many pairs
-    had sufficient contrast per language.
+  Analysis B (normalize=True):
+    Filters to behaviorally-contrastive pairs and computes the normalized
+    restoration score.
 
-Both analyses are run per perturbation type so that standard_translation,
-transliteration, and code_switching can be compared.
+No coherence filtering: attribution patching on incoherent languages shows
+that no layer can restore refusal when representations are degenerate.
+
+Produces Figure 6 inline.
 
 Usage:
-    python scripts/08_attribution_patching.py \\
-        --model llama \\
-        --dataset-dir dataset/ \\
-        --refusal-dir results/disentangle/ \\
+    python scripts/05_attribution_patching.py \
+        --model llama \
+        --refusal-dir results/representation/llama/ \
         --output-dir results/attribution/
 """
 
@@ -52,23 +51,20 @@ from src.visualization.attribution_maps import plot_attribution_map
 
 
 def parse_args():
-    parser = argparse.ArgumentParser(description="Run attribution patching.")
-    parser.add_argument("--model", required=True, choices=["llama", "gemma", "qwen"])
+    parser = argparse.ArgumentParser(description="Run attribution patching (all languages).")
+    parser.add_argument("--model", required=True, choices=["llama", "qwen", "aya"])
     parser.add_argument("--dataset-dir", default="dataset/")
-    parser.add_argument("--refusal-dir", default="results/disentangle/")
+    parser.add_argument("--refusal-dir", default=None,
+                        help="Directory containing refusal_direction_{model}.npy. "
+                             "Defaults to results/representation/{model}/.")
     parser.add_argument("--output-dir", default="results/attribution/")
     parser.add_argument("--perturbations", nargs="+",
-                        default=["standard_translation", "transliteration", "code_switching"],
-                        help="Perturbation types to run. Each is analysed separately.")
-    parser.add_argument("--languages", nargs="+", default=None,
-                        help="Languages to include. Default: all non-English.")
+                        default=["standard_translation", "transliteration", "code_switching"])
+    parser.add_argument("--languages", nargs="+", default=None)
     parser.add_argument("--batch-size", type=int, default=4)
-    parser.add_argument("--n-prompts", type=int, default=20,
-                        help="Max prompt pairs per (language, perturbation).")
-    parser.add_argument("--min-baseline-diff", type=float, default=0.01,
-                        help="Minimum |baseline_diff| for Analysis B pairs.")
-    parser.add_argument("--hf-token", default=None,
-                        help="Hugging Face token (or set HF_TOKEN env var).")
+    parser.add_argument("--n-prompts", type=int, default=20)
+    parser.add_argument("--min-baseline-diff", type=float, default=0.01)
+    parser.add_argument("--hf-token", default=None)
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--log-level", default="INFO")
     return parser.parse_args()
@@ -94,15 +90,15 @@ def main():
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    # Load refusal direction
-    refusal_path = Path(args.refusal_dir) / f"refusal_direction_{args.model}.npy"
+    # Resolve refusal direction path
+    refusal_dir = Path(args.refusal_dir) if args.refusal_dir else Path(f"results/representation/{args.model}")
+    refusal_path = refusal_dir / f"refusal_direction_{args.model}.npy"
     if not refusal_path.exists():
-        logger.error(f"Refusal direction not found: {refusal_path}. Run script 07 first.")
+        logger.error(f"Refusal direction not found: {refusal_path}. Run script 04 first.")
         sys.exit(1)
     refusal_direction = np.load(str(refusal_path))
     logger.info(f"Loaded refusal direction: shape={refusal_direction.shape}")
 
-    # Build lang -> tier map
     lang_to_tier = {}
     for tier_name, tier_data in lang_cfg.get("tiers", {}).items():
         for lang in tier_data.get("languages", []):
@@ -116,43 +112,27 @@ def main():
     for perturbation in args.perturbations:
         logger.info(f"=== Perturbation: {perturbation} ===")
 
-        df = load_dataset(
-            dataset_dir=args.dataset_dir,
-            perturbations=[perturbation],
-        )
+        df = load_dataset(dataset_dir=args.dataset_dir, perturbations=[perturbation])
         if df.empty:
             logger.warning(f"No data for perturbation={perturbation}. Skipping.")
             continue
 
         from transformers import AutoTokenizer
-        tokenizer = AutoTokenizer.from_pretrained(
-            model_name, trust_remote_code=True, token=hf_token
-        )
+        tokenizer = AutoTokenizer.from_pretrained(model_name, trust_remote_code=True, token=hf_token)
         df = format_for_model(df, model_name, tokenizer)
 
-        # English harmful prompts (clean signal)
-        en_harmful = df[
-            (df["language"] == "en") & df["is_harmful"]
-        ]["formatted_prompt"].tolist()[:args.n_prompts]
-
+        en_harmful = df[(df["language"] == "en") & df["is_harmful"]]["formatted_prompt"].tolist()[:args.n_prompts]
         if not en_harmful:
             logger.warning(f"No English harmful prompts for {perturbation}. Skipping.")
             continue
 
         if args.dry_run:
-            logger.info(
-                f"[DRY RUN] Would patch {len(en_harmful)} pairs × "
-                f"{len(languages_to_run)} languages for {perturbation}."
-            )
+            logger.info(f"[DRY RUN] Would patch {len(en_harmful)} pairs x {len(languages_to_run)} languages.")
             continue
 
         for lang in languages_to_run:
             tier = lang_to_tier.get(lang, "unknown")
-
-            langx_harmful = df[
-                (df["language"] == lang) & df["is_harmful"]
-            ]["formatted_prompt"].tolist()[:args.n_prompts]
-
+            langx_harmful = df[(df["language"] == lang) & df["is_harmful"]]["formatted_prompt"].tolist()[:args.n_prompts]
             if not langx_harmful:
                 logger.warning(f"  No {lang} harmful prompts. Skipping.")
                 continue
@@ -161,10 +141,7 @@ def main():
             en_batch = en_harmful[:n]
             lang_batch = langx_harmful[:n]
 
-            logger.info(
-                f"  Analysis A (unnormalized): en vs {lang} "
-                f"({perturbation}, {n} pairs)..."
-            )
+            logger.info(f"  Analysis A: en vs {lang} ({perturbation}, {n} pairs)...")
             try:
                 df_a = run_attribution_patching(
                     model_name=model_name,
@@ -183,10 +160,7 @@ def main():
             except Exception as e:
                 logger.error(f"  Analysis A failed for {lang}/{perturbation}: {e}")
 
-            logger.info(
-                f"  Analysis B (normalized, filtered): en vs {lang} "
-                f"({perturbation})..."
-            )
+            logger.info(f"  Analysis B: en vs {lang} ({perturbation})...")
             try:
                 df_b = run_attribution_patching(
                     model_name=model_name,
@@ -203,13 +177,6 @@ def main():
                     hf_token=hf_token,
                 )
                 all_b_results.append(df_b)
-                if not df_b.empty:
-                    n_used = df_b["n_pairs_used"].iloc[0]
-                    n_skip = df_b["n_pairs_skipped"].iloc[0]
-                    logger.info(
-                        f"    Analysis B: {n_used} pairs used, "
-                        f"{n_skip} skipped (no behavioral contrast)"
-                    )
             except Exception as e:
                 logger.error(f"  Analysis B failed for {lang}/{perturbation}: {e}")
 
@@ -217,45 +184,30 @@ def main():
         logger.error("No attribution patching results produced.")
         sys.exit(1)
 
-    # ── Save Analysis A ──
     if all_a_results:
         df_a_all = pd.concat(all_a_results, ignore_index=True)
         df_a_all.to_csv(output_dir / "attribution_a_results.csv", index=False)
         tier_a = aggregate_by_tier(df_a_all)
         tier_a.to_csv(output_dir / "attribution_a_by_tier.csv", index=False)
 
-        # Critical layers from Analysis A residual scores (averaged across languages)
         critical = identify_critical_layers(df_a_all, top_k=5, component="residual")
         with open(output_dir / "critical_layers.json", "w") as f:
             json.dump({"critical_layers": critical}, f, indent=2)
         logger.info(f"Critical layers (Analysis A, residual): {critical}")
 
         try:
-            plot_attribution_map(tier_a, str(output_dir / "fig_attribution_a"))
+            figures_dir = Path("figures/")
+            figures_dir.mkdir(parents=True, exist_ok=True)
+            plot_attribution_map(tier_a, str(figures_dir / f"fig6_attribution_{args.model}"))
+            logger.info("Figure 6 (attribution map) saved.")
         except Exception as e:
-            logger.warning(f"Plot failed: {e}")
+            logger.warning(f"Attribution plot failed: {e}")
 
-    # ── Save Analysis B ──
     if all_b_results:
         df_b_all = pd.concat(all_b_results, ignore_index=True)
         df_b_all.to_csv(output_dir / "attribution_b_results.csv", index=False)
         tier_b = aggregate_by_tier(df_b_all)
         tier_b.to_csv(output_dir / "attribution_b_by_tier.csv", index=False)
-
-        # Pair coverage summary: how many pairs had behavioral contrast per language
-        if "n_pairs_used" in df_b_all.columns:
-            coverage = (
-                df_b_all.groupby(["language", "perturbation"])["n_pairs_used"]
-                .first()
-                .reset_index()
-            )
-            coverage.to_csv(output_dir / "analysis_b_pair_coverage.csv", index=False)
-            logger.info("Analysis B pair coverage:\n" + coverage.to_string(index=False))
-
-        try:
-            plot_attribution_map(tier_b, str(output_dir / "fig_attribution_b"))
-        except Exception as e:
-            logger.warning(f"Plot failed: {e}")
 
     logger.info(f"Attribution patching complete. Results in {output_dir}.")
 

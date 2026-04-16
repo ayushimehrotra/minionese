@@ -34,6 +34,8 @@ def _normalize_model_name(model_name: str) -> str:
         "llama",
     ]):
         return "llama-3.1-8b"
+    if any(x in name for x in ["qwen2.5-7b", "qwen-2.5-7b", "qwen"]):
+        return "qwen2.5-7b"
     return name
 
 

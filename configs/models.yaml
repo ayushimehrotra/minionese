@@ -2,45 +2,37 @@ target_models:
   llama:
     name: "meta-llama/Llama-3.1-8B-Instruct"
     num_layers: 32
-    hidden_dim: 4096
     num_heads: 32
-    sae_suite: "fnlp/Llama-Scope-8B-Base-LXR-32x-TopK"  # LlamaScope, all layers, base model (generalizes to instruct)
-    sae_fallback: "EleutherAI/sae-llama-3.1-8b-32x"       # EleutherAI alternative
-    sae_source: "saelens"
-    sae_pretrained: true
-    critical_layer_range: [12, 22]
-  gemma:
-    name: "google/gemma-2-9b-it"
-    num_layers: 42
-    hidden_dim: 3584
-    num_heads: 16
-    sae_suite: "google/gemma-scope-9b-it-res"  # GemmaScope IT, all layers + sublayers
-    sae_fallback: "google/gemma-scope-9b-pt-res"  # base model SAEs also work well on IT
-    sae_source: "saelens"
-    sae_pretrained: true
-    critical_layer_range: [15, 30]
+    hidden_size: 4096
+    critical_layer_range: [10, 22]
+    has_sae: true
+    sae_repo: "EleutherAI/sae-llama-3.1-8b-64x"
+    sae_hook_component: "mlp"
+    coherent_tiers: ["tier1", "tier2"]
+
   qwen:
     name: "Qwen/Qwen2.5-7B-Instruct"
     num_layers: 28
-    hidden_dim: 3584
     num_heads: 28
-    sae_suite: "andyrdt/saes-qwen2.5-7b-instruct"
-    sae_source: "saelens"
-    sae_pretrained: true
-    critical_layer_range: [10, 20]
+    hidden_size: 3584
+    critical_layer_range: [9, 19]
+    has_sae: true
+    sae_repo: "andyrdt/saes-qwen2.5-7b-instruct"
+    sae_hook_component: "mlp"
+    coherent_tiers: ["tier1", "tier2"]
+
   aya:
-    name: "CohereForAI/aya-expanse-32b"
-    num_layers: 64
-    hidden_dim: 8192
-    num_heads: 64
-    sae_suite: null
-    sae_pretrained: false
-    critical_layer_range: [20, 45]
+    name: "CohereForAI/aya-expanse-8b"
+    num_layers: 32
+    num_heads: 32
+    hidden_size: 4096
+    critical_layer_range: [10, 22]
+    has_sae: false
+    sae_repo: null
+    sae_hook_component: null
+    coherent_tiers: ["tier1", "tier2", "tier3"]
 
 judge_models:
   primary:
     name: "allenai/wildguard"
-    type: "classifier"
-  secondary:
-    name: "meta-llama/LlamaGuard-3-8B"
     type: "classifier"

@@ -1,8 +1,15 @@
 #!/usr/bin/env python3
 """
-Script 02: Run Generation
+Script 01: Generate Responses
 
-Generate model responses for all languages x perturbations.
+Generate model responses for all (language, perturbation) combinations.
+
+Usage:
+    python scripts/01_generate.py \
+        --model llama \
+        --use-vllm \
+        --dataset-dir dataset/ \
+        --output-dir results/generations/
 """
 
 import argparse
@@ -23,8 +30,8 @@ from src.utils.reproducibility import setup_reproducibility
 
 def parse_args():
     parser = argparse.ArgumentParser(description="Run model generation.")
-    parser.add_argument("--model", required=True, choices=["llama", "gemma", "qwen", "aya"],
-                        help="Model key (llama, gemma, qwen, aya).")
+    parser.add_argument("--model", required=True, choices=["llama", "qwen", "aya"],
+                        help="Model key.")
     parser.add_argument("--dataset-dir", default="dataset/")
     parser.add_argument("--output-dir", default="results/generations/")
     parser.add_argument("--config", default="configs/experiment.yaml")
@@ -32,35 +39,29 @@ def parse_args():
     parser.add_argument("--languages", nargs="+", default=None)
     parser.add_argument("--batch-size", type=int, default=8)
     parser.add_argument("--max-new-tokens", type=int, default=512)
-    parser.add_argument("--hf-token", default=None,
-                        help="Hugging Face token. If omitted, uses HF_TOKEN env var or prompts securely.")
     parser.add_argument("--use-vllm", action="store_true",
-                        help="Use vLLM for faster generation (recommended for large models).")
+                        help="Use vLLM for faster generation (recommended).")
+    parser.add_argument("--hf-token", default=None,
+                        help="Hugging Face token. If omitted, uses HF_TOKEN env var or prompts.")
     parser.add_argument("--dry-run", action="store_true",
                         help="Load dataset and validate without running inference.")
     parser.add_argument("--log-level", default="INFO")
     return parser.parse_args()
 
 
-def resolve_hf_token(cli_token: str | None) -> str | None:
-    # Priority: CLI arg -> environment variable -> interactive prompt
+def resolve_hf_token(cli_token):
     token = cli_token or os.environ.get("HF_TOKEN")
     if token:
         return token.strip()
-
     print("\nThis model may require Hugging Face authentication.")
-    print("Paste your HF token below. Input will be hidden.")
     token = getpass("HF token: ").strip()
-
-    if not token:
-        return None
-    return token
+    return token or None
 
 
 def main():
     args = parse_args()
     setup_logging(level=args.log_level)
-    logger = logging.getLogger("run_generation")
+    logger = logging.getLogger("generate")
     setup_reproducibility(seed=42)
 
     config = load_config()
@@ -91,7 +92,6 @@ def main():
 
     hf_token = resolve_hf_token(args.hf_token)
 
-    # Format prompts with chat template
     from transformers import AutoTokenizer
     logger.info("Loading tokenizer...")
     tokenizer = AutoTokenizer.from_pretrained(
@@ -103,7 +103,6 @@ def main():
     logger.info("Applying chat template...")
     df = format_for_model(df, model_name, tokenizer)
 
-    # Generate per (perturbation, language) group
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
