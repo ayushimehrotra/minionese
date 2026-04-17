@@ -182,7 +182,6 @@ pycparser==2.22
 pydantic==2.12.5
 pydantic_core==2.41.5
 Pygments==2.18.0
-PyGObject==3.42.1
 PyJWT==2.3.0
 pyparsing==3.3.2
 pytest==9.0.3
@@ -257,3 +256,5 @@ xxhash==3.6.0
 yarl==1.23.0
 zipp==1.0.0
 zstandard==0.25.0
+pandas
+transformers

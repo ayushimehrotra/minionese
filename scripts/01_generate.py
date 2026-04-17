@@ -27,6 +27,9 @@ from src.utils.config import load_config, get_model_config
 from src.utils.logging_setup import setup_logging
 from src.utils.reproducibility import setup_reproducibility
 
+import os
+os.environ["VLLM_WORKER_MULTIPROC_METHOD"] = "spawn"
+
 
 def parse_args():
     parser = argparse.ArgumentParser(description="Run model generation.")
