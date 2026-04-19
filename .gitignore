@@ -1,3 +1,8 @@
 results/
 minionese_outputs/results/
 data/activations/
+
+# local secrets
+.git.env
+git.env
+.env
