@@ -60,15 +60,19 @@ def extract_activations(
 
     torch_dtype = torch.float32 if dtype == "float32" else torch.float16
 
+    import os
+    hf_token = os.environ.get("HF_TOKEN") or os.environ.get("HUGGINGFACE_HUB_TOKEN")
+
     logger.info(f"Loading model via NNsight: {model_name}")
     lm = LanguageModel(
         model_name,
         device_map="auto",
         dtype=torch.bfloat16,
         dispatch=True,
+        token=hf_token,
     )
     logger.info(f"NNsight model device: {lm.device}")
-    tokenizer = AutoTokenizer.from_pretrained(model_name, trust_remote_code=True)
+    tokenizer = AutoTokenizer.from_pretrained(model_name, trust_remote_code=True, token=hf_token)
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
     tokenizer.padding_side = "left"

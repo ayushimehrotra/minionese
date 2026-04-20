@@ -83,6 +83,9 @@ def main():
     os.environ["HUGGINGFACE_HUB_TOKEN"] = hf_token
     os.environ["HF_HUB_TOKEN"] = hf_token
 
+    from huggingface_hub import login
+    login(token=hf_token, add_to_git_credential=False)
+
     layers = "all" if args.layers == "all" else [int(l) for l in args.layers.split(",")]
 
     logger.info(f"Loading dataset from {args.dataset_dir} (ALL languages, no coherence filter)...")

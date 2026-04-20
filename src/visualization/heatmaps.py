@@ -74,13 +74,15 @@ def plot_silhouette_heatmap(
     ordered_langs += remaining
     pivot = pivot[ordered_langs]
 
+    # Clip negatives — negative silhouette means misclassified overlap, shown as 0
+    pivot = pivot.clip(lower=0.0)
+
     fig, ax = plt.subplots(figsize=figsize)
     sns.heatmap(
         pivot,
         ax=ax,
-        cmap="RdBu",
-        center=0.0,
-        vmin=-1.0,
+        cmap="YlOrRd",
+        vmin=0.0,
         vmax=1.0,
         annot=False,
         cbar_kws={"label": "Silhouette Score"},
@@ -123,54 +125,47 @@ def plot_asr_heatmap(
         logger.warning("'asr_wildguard' column missing from data.")
         return
 
+    # Drop minionese — it is a special case plotted separately
+    data = data[data["language"] != "minionese"].copy()
+
     pivot = data.pivot_table(
         index="language", columns="perturbation", values="asr_wildguard", aggfunc="mean"
     )
 
-    # Build collapse mask if coherence data supplied
-    collapse_mask = pd.DataFrame(False, index=pivot.index, columns=pivot.columns)
-    if coherence_data is not None and not coherence_data.empty and "regime" in coherence_data.columns:
-        for _, row in coherence_data.iterrows():
-            lang = row.get("language")
-            pert = row.get("perturbation")
-            if lang in collapse_mask.index and pert in collapse_mask.columns:
-                if row.get("regime") == "collapse":
-                    collapse_mask.loc[lang, pert] = True
+    # Order languages by tier, dropping minionese
+    ordered_langs = []
+    for tier_langs in TIER_ORDER.values():
+        for lang in tier_langs:
+            if lang in pivot.index:
+                ordered_langs.append(lang)
+    remaining = [l for l in pivot.index if l not in ordered_langs]
+    ordered_langs += remaining
+    pivot = pivot.reindex(ordered_langs)
 
-    # Annotate N/A for collapse cells
-    annot = pivot.copy().applymap(lambda v: f"{v:.2f}" if not np.isnan(v) else "")
-    for lang in collapse_mask.index:
-        for pert in collapse_mask.columns:
-            if collapse_mask.loc[lang, pert]:
-                annot.loc[lang, pert] = "N/A"
+    # Scale to percentage for readability; vmax = data max (min 10%) for contrast
+    pivot_pct = pivot * 100
+    vmax = max(pivot_pct.max().max(), 10.0)
+
+    # Annotate all cells with their ASR value — coherence is already baked into the
+    # per-generation ASR numerator, so no cells need to be masked as N/A
+    annot = pivot_pct.copy().map(lambda v: f"{v:.1f}%" if not np.isnan(v) else "")
 
     fig, ax = plt.subplots(figsize=figsize)
     sns.heatmap(
-        pivot,
+        pivot_pct,
         ax=ax,
         cmap="Reds",
         vmin=0.0,
-        vmax=1.0,
+        vmax=vmax,
         annot=annot,
         fmt="",
         annot_kws={"size": FONT_SIZE - 2},
-        cbar_kws={"label": "ASR"},
-        mask=collapse_mask.values,
+        cbar_kws={"label": "ASR (%)"},
     )
-    # Gray out collapse cells
-    if collapse_mask.values.any():
-        gray_data = pivot.copy()
-        gray_data[:] = 0.5
-        sns.heatmap(
-            gray_data,
-            ax=ax,
-            cmap=["#cccccc"],
-            annot=annot,
-            fmt="",
-            annot_kws={"size": FONT_SIZE - 2},
-            mask=~collapse_mask.values,
-            cbar=False,
-        )
+
+    # Tier boundary horizontal lines
+    _annotate_tier_boundaries_h(ax, ordered_langs)
+
     ax.set_title(title, fontsize=FONT_SIZE)
     ax.set_xlabel("Perturbation Type", fontsize=FONT_SIZE)
     ax.set_ylabel("Language", fontsize=FONT_SIZE)
@@ -201,11 +196,13 @@ def plot_coherence_heatmap(
         logger.warning("No data to plot coherence heatmap.")
         return
 
+    coherence_df = coherence_df[coherence_df["language"] != "minionese"].copy()
+
     models = sorted(coherence_df["model"].unique()) if "model" in coherence_df.columns else ["all"]
     n_models = len(models)
     fig, axes = plt.subplots(1, n_models, figsize=figsize, squeeze=False)
 
-    # Build ordered language list from tier definitions
+    # Build ordered language list from tier definitions (no minionese)
     ordered_langs = []
     for tier_langs in TIER_ORDER.values():
         ordered_langs.extend(tier_langs)
@@ -322,6 +319,69 @@ def plot_regime_comparison(
     _save_figure(fig, output_path)
 
 
+def plot_principal_angles_by_tier(
+    data: pd.DataFrame,
+    output_path: str,
+    title: str = "Principal Angles vs English Harm Subspace",
+    figsize: tuple = (10, 7),
+) -> None:
+    """
+    4-panel figure (one per tier) showing principal angle vs layer per language.
+
+    Args:
+        data: DataFrame with columns: language, layer, angle_deg.
+        output_path: Output file path (without extension).
+    """
+    _apply_style()
+
+    if data.empty:
+        logger.warning("No data to plot principal angles.")
+        return
+
+    # Average across angle indices if multiple
+    data = data.groupby(["language", "layer"])["angle_deg"].mean().reset_index()
+
+    tier_labels = {
+        "tier1": "Tier 1 — High-resource",
+        "tier2": "Tier 2 — Mid-resource",
+        "tier3": "Tier 3 — Low-resource",
+        "tier4": "Tier 4 — Very-low-resource",
+    }
+    tiers = list(TIER_ORDER.keys())
+
+    fig, axes = plt.subplots(2, 2, figsize=figsize, sharex=True, sharey=True)
+    axes = axes.flatten()
+
+    for ax_idx, tier_key in enumerate(tiers):
+        ax = axes[ax_idx]
+        tier_langs = [l for l in TIER_ORDER[tier_key] if l in data["language"].values]
+
+        palette = sns.color_palette("colorblind", n_colors=max(len(tier_langs), 1))
+        for i, lang in enumerate(tier_langs):
+            lang_data = data[data["language"] == lang].sort_values("layer")
+            ax.plot(
+                lang_data["layer"],
+                lang_data["angle_deg"],
+                label=lang,
+                color=palette[i],
+                marker="o",
+                markersize=3,
+                linewidth=1.2,
+            )
+
+        ax.axhline(y=90, color="gray", linewidth=0.8, linestyle=":", alpha=0.6)
+        ax.set_title(tier_labels[tier_key], fontsize=FONT_SIZE)
+        ax.set_ylim(0, 95)
+        ax.set_ylabel("Angle (°)", fontsize=FONT_SIZE)
+        ax.set_xlabel("Layer", fontsize=FONT_SIZE)
+        if tier_langs:
+            ax.legend(fontsize=FONT_SIZE - 2, loc="upper left", ncol=2)
+
+    fig.suptitle(title, fontsize=FONT_SIZE + 1)
+    plt.tight_layout()
+    _save_figure(fig, output_path)
+
+
 def plot_effective_rank(
     data: pd.DataFrame,
     output_path: str,
@@ -378,6 +438,16 @@ def _annotate_tier_boundaries(ax, ordered_langs: list) -> None:
 
     for boundary in tier_positions[:-1]:
         ax.axvline(x=boundary, color="black", linewidth=1.0, linestyle="--", alpha=0.5)
+
+
+def _annotate_tier_boundaries_h(ax, ordered_langs: list) -> None:
+    """Add horizontal lines separating tier boundaries (for language-indexed rows)."""
+    pos = 0
+    for tier_langs in list(TIER_ORDER.values())[:-1]:
+        count = sum(1 for l in tier_langs if l in ordered_langs)
+        pos += count
+        if 0 < pos < len(ordered_langs):
+            ax.axhline(y=pos, color="black", linewidth=1.0, linestyle="--", alpha=0.5)
 
 
 def _save_figure(fig, output_path: str) -> None:

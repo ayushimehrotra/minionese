@@ -170,6 +170,7 @@ def main():
     # === CROSS-LINGUAL PHASE ===
     logger.info("Building subspace projections...")
     subspace_projections = {}
+    subspace_bases = {}  # (lang, layer) -> Vt_top (rank, hidden) — used for principal angles
     for lang in languages:
         for layer in critical_layers:
             try:
@@ -177,35 +178,42 @@ def main():
                     str(probes_dir), lang, layer, harm_categories
                 )
                 subspace_projections[(lang, layer)] = subspace["projection_matrix"]
+                # Vt[:effective_rank] are the basis vectors (rank, hidden_dim)
+                subspace_bases[(lang, layer)] = subspace["Vt"][:subspace["effective_rank"]].T
             except Exception as e:
                 logger.debug(f"No subspace for ({lang}, layer={layer}): {e}")
 
     # Silhouette scores
-    logger.info("Computing silhouette scores...")
-    sil_rows = []
-    for lang in languages:
-        harm_acts = activations.get((lang, "harmful"))
-        harmless_acts = activations.get((lang, "harmless"))
-        if harm_acts is None or harmless_acts is None:
-            continue
-        for layer in critical_layers:
-            try:
-                hl = _select_layer(harm_acts, layer)
-                hsl = _select_layer(harmless_acts, layer)
-                if hl.shape[0] < 2 or hsl.shape[0] < 2:
-                    continue
-                P = subspace_projections.get((lang, layer))
-                if P is not None and hl.shape[1] == P.shape[0]:
-                    hl = hl @ P
-                    hsl = hsl @ P
-                X = np.vstack([hl, hsl])
-                y = np.array([1] * len(hl) + [0] * len(hsl))
-                score = silhouette_score(X, y)
-                sil_rows.append({"language": lang, "layer": layer, "silhouette_score": float(score)})
-            except Exception as e:
-                logger.debug(f"Silhouette failed ({lang}, {layer}): {e}")
-    sil_df = pd.DataFrame(sil_rows)
-    sil_df.to_csv(output_dir / "silhouette_scores.csv", index=False)
+    sil_out = output_dir / "silhouette_scores.csv"
+    if sil_out.exists() and sil_out.stat().st_size > 10:
+        logger.info("Silhouette scores already computed, skipping.")
+        sil_df = pd.read_csv(sil_out)
+    else:
+        logger.info("Computing silhouette scores...")
+        sil_rows = []
+        for lang in languages:
+            harm_acts = activations.get((lang, "harmful"))
+            harmless_acts = activations.get((lang, "harmless"))
+            if harm_acts is None or harmless_acts is None:
+                continue
+            for layer in critical_layers:
+                try:
+                    hl = _select_layer(harm_acts, layer)
+                    hsl = _select_layer(harmless_acts, layer)
+                    if hl.shape[0] < 2 or hsl.shape[0] < 2:
+                        continue
+                    P = subspace_projections.get((lang, layer))
+                    if P is not None and hl.shape[1] == P.shape[0]:
+                        hl = hl @ P
+                        hsl = hsl @ P
+                    X = np.vstack([hl, hsl])
+                    y = np.array([1] * len(hl) + [0] * len(hsl))
+                    score = silhouette_score(X, y)
+                    sil_rows.append({"language": lang, "layer": layer, "silhouette_score": float(score)})
+                except Exception as e:
+                    logger.debug(f"Silhouette failed ({lang}, {layer}): {e}")
+        sil_df = pd.DataFrame(sil_rows)
+        sil_df.to_csv(sil_out, index=False)
 
     # Principal angles
     logger.info("Computing principal angles...")
@@ -219,8 +227,10 @@ def main():
             if en_proj is None or lang_proj is None:
                 continue
             try:
-                U_en = np.linalg.svd(en_proj, full_matrices=False)[2][:5].T
-                U_lang = np.linalg.svd(lang_proj, full_matrices=False)[2][:5].T
+                U_en = subspace_bases.get(("en", layer))
+                U_lang = subspace_bases.get((lang, layer))
+                if U_en is None or U_lang is None:
+                    continue
                 angles = compute_principal_angles(U_en, U_lang)
                 for i, angle in enumerate(angles):
                     pa_rows.append({"language": lang, "layer": layer,

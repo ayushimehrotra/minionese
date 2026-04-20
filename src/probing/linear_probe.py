@@ -58,15 +58,25 @@ def train_probe(
     )
     clf.fit(X_scaled, y)
 
-    y_pred = clf.predict(X_scaled)
-    y_prob = clf.predict_proba(X_scaled)[:, 1]
-
+    # CV AUC: mean across folds for the best C (from LogisticRegressionCV internal scores)
     try:
-        auc = roc_auc_score(y, y_prob)
+        best_C_idx = np.argmax(np.mean(clf.scores_[1], axis=0))
+        auc = float(np.mean(clf.scores_[1][:, best_C_idx]))
     except Exception:
         auc = 0.0
 
-    accuracy = (y_pred == y).mean()
+    # CV accuracy: cross-validate with the selected C on held-out folds
+    from sklearn.linear_model import LogisticRegression
+    from sklearn.model_selection import cross_val_score as _cvs
+    best_C = float(np.asarray(clf.C_).reshape(-1)[0])
+    try:
+        acc_scores = _cvs(
+            LogisticRegression(C=best_C, max_iter=1000),
+            X_scaled, y, cv=cv_folds, scoring="accuracy",
+        )
+        accuracy = float(acc_scores.mean())
+    except Exception:
+        accuracy = 0.0
 
     return {
         "weights": clf.coef_[0].copy(),
@@ -74,7 +84,7 @@ def train_probe(
         "best_C": float(np.asarray(clf.C_).reshape(-1)[0]),
         "cv_accuracy": float(accuracy),
         "cv_auc": float(auc),
-        "classification_report": classification_report(y, y_pred, output_dict=True),
+        "classification_report": {},
         "scaler_mean": scaler.mean_.copy(),
         "scaler_std": scaler.scale_.copy(),
     }
@@ -173,6 +183,19 @@ def train_all_probes(
                     logger.error(f"Probe training failed ({lang}, layer={layer_idx}, cat={category}): {e}")
                     continue
 
+                probe_path = output_dir / f"probe_{lang}_layer{layer_idx}_{category}.npz"
+                if probe_path.exists():
+                    saved = np.load(str(probe_path), allow_pickle=False)
+                    summary_rows.append({
+                        "language": lang, "layer": layer_idx, "category": category,
+                        "cv_accuracy": float(saved["cv_accuracy"][0]) if "cv_accuracy" in saved else 0.0,
+                        "cv_auc": float(saved["cv_auc"][0]) if "cv_auc" in saved else 0.0,
+                        "best_C": float(saved["best_C"][0]) if "best_C" in saved else 1.0,
+                        "n_harmful": len(harm_indices),
+                        "n_benign": len(benign_indices),
+                    })
+                    continue
+
                 probe_data = {
                     "language": lang,
                     "layer": layer_idx,
@@ -185,15 +208,32 @@ def train_all_probes(
                 }
                 summary_rows.append(probe_data)
 
-                # Save probe weights
-                probe_path = output_dir / f"probe_{lang}_layer{layer_idx}_{category}.npz"
-                np.savez(
-                    str(probe_path),
-                    weights=result["weights"],
-                    bias=np.array([result["bias"]]),
-                    scaler_mean=result["scaler_mean"],
-                    scaler_std=result["scaler_std"],
-                )
+                # Save probe weights with retry for transient network FS errors (errno 5)
+                import time as _time
+                _saved = False
+                for _attempt in range(5):
+                    try:
+                        tmp_path = probe_path.with_suffix(".tmp.npz")
+                        np.savez(
+                            str(tmp_path),
+                            weights=result["weights"],
+                            bias=np.array([result["bias"]]),
+                            scaler_mean=result["scaler_mean"],
+                            scaler_std=result["scaler_std"],
+                            cv_accuracy=np.array([result["cv_accuracy"]]),
+                            cv_auc=np.array([result["cv_auc"]]),
+                            best_C=np.array([result["best_C"]]),
+                        )
+                        tmp_path.replace(probe_path)
+                        _saved = True
+                        break
+                    except OSError as _e:
+                        logger.warning(f"Save attempt {_attempt+1} failed for {probe_path.name}: {_e}. Retrying...")
+                        _time.sleep(2 ** _attempt)
+                        if tmp_path.exists():
+                            tmp_path.unlink(missing_ok=True)
+                if not _saved:
+                    logger.error(f"Failed to save {probe_path.name} after 5 attempts; skipping.")
 
         logger.info(f"Probes trained for language: {lang}")
 

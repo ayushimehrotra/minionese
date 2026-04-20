@@ -22,7 +22,7 @@ target_models:
     coherent_tiers: ["tier1", "tier2"]
 
   aya:
-    name: "CohereForAI/aya-expanse-8b"
+    name: "CohereLabs/aya-expanse-8b"
     num_layers: 32
     num_heads: 32
     hidden_size: 4096

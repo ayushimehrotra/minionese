@@ -47,8 +47,8 @@ def compute_rank_profile(
     Returns:
         Dict with keys: singular_values, effective_rank, energy_spectrum.
     """
-    # Center the activations
-    centered = activations - activations.mean(axis=0, keepdims=True)
+    # Center the activations; cast to float32 since linalg.svd doesn't support float16
+    centered = (activations - activations.mean(axis=0, keepdims=True)).astype(np.float32)
     U, S, Vt = np.linalg.svd(centered, full_matrices=False)
     rank = effective_rank_at_threshold(S, threshold)
     energy = np.cumsum(S ** 2) / (np.sum(S ** 2) + 1e-12)
