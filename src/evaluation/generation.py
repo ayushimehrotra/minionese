@@ -225,6 +225,7 @@ def _generate_responses_vllm(
         dtype="bfloat16",
         trust_remote_code=True,
         max_model_len=4096,
+        gpu_memory_utilization=0.85,
     )
 
     sampling_params = SamplingParams(
