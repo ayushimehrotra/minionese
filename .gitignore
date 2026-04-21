@@ -28,5 +28,10 @@ env/
 .DS_Store
 *.swp
 
+# Large scored JSONL files (>100MB, use asr_detailed.csv instead)
+results/evaluation/all_scored*.jsonl
+results/evaluation/backtranslated_cache.jsonl
+results/evaluation/wildguard_cache*.jsonl
+
 # Logs
 *.log
