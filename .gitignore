@@ -1,0 +1,32 @@
+# Activations and large data
+data/
+data/activations/
+*.safetensors
+*.h5
+*.hdf5
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+*.egg
+.eggs/
+dist/
+build/
+*.so
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Env
+.env
+.venv
+venv/
+env/
+
+# OS
+.DS_Store
+*.swp
+
+# Logs
+*.log

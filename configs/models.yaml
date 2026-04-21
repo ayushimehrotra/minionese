@@ -1,0 +1,38 @@
+target_models:
+  llama:
+    name: "meta-llama/Llama-3.1-8B-Instruct"
+    num_layers: 32
+    num_heads: 32
+    hidden_size: 4096
+    critical_layer_range: [10, 22]
+    has_sae: true
+    sae_repo: "EleutherAI/sae-llama-3.1-8b-64x"
+    sae_hook_component: "mlp"
+    coherent_tiers: ["tier1", "tier2"]
+
+  qwen:
+    name: "Qwen/Qwen2.5-7B-Instruct"
+    num_layers: 28
+    num_heads: 28
+    hidden_size: 3584
+    critical_layer_range: [9, 19]
+    has_sae: true
+    sae_repo: "andyrdt/saes-qwen2.5-7b-instruct"
+    sae_hook_component: "mlp"
+    coherent_tiers: ["tier1", "tier2"]
+
+  aya:
+    name: "CohereLabs/aya-expanse-8b"
+    num_layers: 32
+    num_heads: 32
+    hidden_size: 4096
+    critical_layer_range: [10, 22]
+    has_sae: false
+    sae_repo: null
+    sae_hook_component: null
+    coherent_tiers: ["tier1", "tier2", "tier3"]
+
+judge_models:
+  primary:
+    name: "allenai/wildguard"
+    type: "classifier"

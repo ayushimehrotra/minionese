@@ -1,0 +1,44 @@
+tiers:
+  tier_1:
+    languages: ["en", "de", "fr", "zh", "es"]
+    label: "High-resource"
+    script_types:
+      en: "latin"
+      de: "latin"
+      fr: "latin"
+      zh: "hanzi"
+      es: "latin"
+
+  tier_2:
+    languages: ["ar", "ru", "ko", "ja"]
+    label: "Mid-resource"
+    script_types:
+      ar: "arabic"
+      ru: "cyrillic"
+      ko: "hangul"
+      ja: "mixed"
+
+  tier_3:
+    languages: ["tr", "id", "hi", "sw"]
+    label: "Low-resource"
+    script_types:
+      tr: "latin"
+      id: "latin"
+      hi: "devanagari"
+      sw: "latin"
+
+  tier_4:
+    languages: ["yo", "zu", "gd", "gn"]
+    label: "Very-low-resource"
+    script_types:
+      yo: "latin"
+      zu: "latin"
+      gd: "latin"
+      gn: "latin"
+
+perturbation_types:
+  - "standard_translation"
+  - "translationese"
+  - "code_switching"
+  - "transliteration"
+  - "minionese"

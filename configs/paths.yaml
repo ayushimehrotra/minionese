@@ -1,0 +1,32 @@
+# Data and output directory paths
+
+# Pre-built dataset root (read-only)
+dataset_dir: "dataset/"
+
+# Generated data directories
+data_dir: "data/"
+activations_dir: "data/activations/"
+splits_dir: "data/splits/"
+
+# Results directories
+results_dir: "results/"
+generations_dir: "results/generations/"
+safety_scores_dir: "results/safety_scores/"
+probes_dir: "results/probes/"
+cross_lingual_dir: "results/cross_lingual/"
+disentangle_dir: "results/disentangle/"
+attribution_dir: "results/attribution/"
+head_tracing_dir: "results/head_tracing/"
+english_pivot_dir: "results/english_pivot/"
+sae_features_dir: "results/sae_features/"
+interventions_dir: "results/interventions/"
+intervention_eval_dir: "results/intervention_eval/"
+
+# Trained SAEs directory (for Qwen)
+trained_saes_dir: "trained_saes/"
+
+# Figures output
+figures_dir: "figures/"
+
+# Logs
+logs_dir: "logs/"
