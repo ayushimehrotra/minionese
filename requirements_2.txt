@@ -1,0 +1,13 @@
+pandas
+transformers
+accelerate
+matplotlib
+seaborn
+vllm
+nnsight
+sklearn
+eai-sparsify
+fasttext-langdetect
+
+
+pip install "numpy<2" --break-system-packages

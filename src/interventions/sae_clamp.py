@@ -83,6 +83,8 @@ def apply_sae_clamping(
     encoding activations into SAE space, clamping top features, and decoding back.
     """
     device = next(model.parameters()).device
+    if hasattr(sae, "to"):
+        sae = sae.to(device)
     selected_features = [int(f) for f in ranked_features[:n_features]]
 
     logger.info(
@@ -114,7 +116,7 @@ def apply_sae_clamping(
 
         try:
             encoded = sae.encode(last_hidden)
-            z = _extract_latent_tensor(encoded)
+            z = _extract_latent_tensor(encoded).to(device=last_hidden.device)
 
             if z.ndim != 2:
                 logger.warning(f"Unexpected SAE latent shape: {tuple(z.shape)}")
@@ -129,7 +131,7 @@ def apply_sae_clamping(
                     continue
                 z[:, fidx] = clamp_tensors[fidx].to(dtype=z.dtype)
 
-            recon = _decode_with_sae(sae, z)
+            recon = _decode_with_sae(sae, z).to(device=last_hidden.device)
 
             if not isinstance(recon, torch.Tensor):
                 logger.warning(f"Unexpected SAE decode output type: {type(recon)}")

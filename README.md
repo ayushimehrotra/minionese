@@ -242,3 +242,4 @@ Tests that don't require GPU/model loading run independently. Tests requiring mo
 | Llama-3.1-8B-Instruct | LlamaScope (fnlp/Llama-Scope-8B-Base-LXR-32x-TopK) | Pre-trained, all layers |
 | Gemma-2-9B-IT | GemmaScope (google/gemma-scope-9b-it-res) | Pre-trained, all layers |
 | Qwen2.5-7B-Instruct | andyrdt/saes-qwen2.5-7b-instruct | Pre-trained, all layers |
+  
