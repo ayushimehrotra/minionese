@@ -83,6 +83,7 @@ def apply_sae_clamping(
     encoding activations into SAE space, clamping top features, and decoding back.
     """
     device = next(model.parameters()).device
+    tokenizer.padding_side = "left"
     if hasattr(sae, "to"):
         sae = sae.to(device)
     selected_features = [int(f) for f in ranked_features[:n_features]]
@@ -117,6 +118,15 @@ def apply_sae_clamping(
         try:
             encoded = sae.encode(last_hidden)
             z = _extract_latent_tensor(encoded).to(device=last_hidden.device)
+            
+            top_indices = None
+            if isinstance(encoded, dict) and "top_indices" in encoded:
+                top_indices = encoded["top_indices"]
+            elif hasattr(encoded, "top_indices"):
+                top_indices = encoded.top_indices
+            
+            if isinstance(top_indices, torch.Tensor):
+                top_indices = top_indices.to(last_hidden.device)
 
             if z.ndim != 2:
                 logger.warning(f"Unexpected SAE latent shape: {tuple(z.shape)}")
@@ -131,7 +141,13 @@ def apply_sae_clamping(
                     continue
                 z[:, fidx] = clamp_tensors[fidx].to(dtype=z.dtype)
 
-            recon = _decode_with_sae(sae, z).to(device=last_hidden.device)
+            if top_indices is not None:
+                recon = sae.decode(z, top_indices)
+            else:
+                recon = sae.decode(z)
+            
+            if isinstance(recon, torch.Tensor):
+                recon = recon.to(device=last_hidden.device)
 
             if not isinstance(recon, torch.Tensor):
                 logger.warning(f"Unexpected SAE decode output type: {type(recon)}")
@@ -145,7 +161,7 @@ def apply_sae_clamping(
                 return output
 
             hidden = hidden.clone()
-            hidden[:, -1, :] = recon.to(hidden.dtype)
+            hidden[:, -1, :] = recon.to(device=hidden.device, dtype=hidden.dtype)
 
             if isinstance(output, tuple):
                 return (hidden,) + output[1:]
