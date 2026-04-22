@@ -36,3 +36,4 @@ results/evaluation/wildguard_cache*.jsonl
 # Logs
 *.log
 .env
+git.env

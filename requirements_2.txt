@@ -1,3 +1,4 @@
+numpy<2
 pandas
 transformers
 accelerate
@@ -5,9 +6,6 @@ matplotlib
 seaborn
 vllm
 nnsight
-sklearn
+scikit-learn
 eai-sparsify
 fasttext-langdetect
-
-
-pip install "numpy<2" --break-system-packages
