@@ -26,6 +26,7 @@ import torch
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
+from src.dataset.loader import load_dataset
 from src.sae.delta_scores import compute_delta_scores, rank_features, feature_analysis_table
 from src.sae.feature_extract import load_sae, encode_activations
 from src.sae.interpret import load_feature_labels
@@ -55,6 +56,7 @@ def parse_args():
     parser.add_argument("--token-position", default="last_post_instruction")
     parser.add_argument("--top-k", type=int, default=50)
     parser.add_argument("--comparison-language", default="ar")
+    parser.add_argument("--dataset-dir", default="dataset/")
     parser.add_argument("--hf-token", default=None)
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--log-level", default="INFO")
@@ -124,6 +126,21 @@ def main():
 
     en_layer = _load_layer(args.model, "en", primary_layer)
     lang_layer = _load_layer(args.model, args.comparison_language, primary_layer)
+
+    # Filter to harmful-only so delta scores reflect the harmful population
+    try:
+        full_df = load_dataset(dataset_dir=args.dataset_dir, perturbations=[args.perturbation])
+        en_df = full_df[full_df["language"] == "en"].reset_index(drop=True)
+        lang_df = full_df[full_df["language"] == args.comparison_language].reset_index(drop=True)
+        if len(en_df) == len(en_layer):
+            en_harm_mask = en_df["is_harmful"].values if "is_harmful" in en_df.columns else (en_df.index < len(en_df) // 2)
+            en_layer = en_layer[torch.from_numpy(en_harm_mask).bool()]
+        if len(lang_df) == len(lang_layer):
+            lang_harm_mask = lang_df["is_harmful"].values if "is_harmful" in lang_df.columns else (lang_df.index < len(lang_df) // 2)
+            lang_layer = lang_layer[torch.from_numpy(lang_harm_mask).bool()]
+        logger.info(f"Filtered to harmful-only: en={len(en_layer)}, {args.comparison_language}={len(lang_layer)}")
+    except Exception as e:
+        logger.warning(f"Could not filter to harmful-only: {e}. Using all activations.")
 
     logger.info(f"Loading SAE for layer {primary_layer}...")
     try:

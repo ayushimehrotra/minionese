@@ -149,11 +149,37 @@ def main():
     if Path(en_act_path).exists():
         en_acts = load_activations(en_act_path)
         if en_acts.ndim == 3 and critical_layer < en_acts.shape[1]:
-            en_layer = en_acts[:, critical_layer, :].float()
+            en_acts_flat = en_acts[:, critical_layer, :].float()
         elif en_acts.ndim == 2:
-            en_layer = en_acts.float()
-    else:
-        logger.warning(f"English activations not found: {en_act_path}. Computing on-the-fly...")
+            en_acts_flat = en_acts.float()
+        else:
+            en_acts_flat = None
+
+        if en_acts_flat is not None:
+            # Load dataset labels in same order as activation extraction to split by is_harmful.
+            # The pre-computed file contains all English samples interleaved by tier (harmful then
+            # harmless per tier), so a blind n//2 split does NOT separate the two classes.
+            en_df_all = load_dataset(dataset_dir=args.dataset_dir, perturbations=[args.perturbation])
+            en_df_all = en_df_all[en_df_all["language"] == "en"].reset_index(drop=True)
+            if len(en_df_all) == len(en_acts_flat):
+                harmful_mask = en_df_all["is_harmful"].values
+                en_harmful = en_acts_flat[harmful_mask]
+                en_harmless = en_acts_flat[~harmful_mask]
+                n_caa = min(len(en_harmful), len(en_harmless), 80)
+                # Reconstruct as harmful[:n] + harmless[:n] so the n//2 split below is valid
+                en_layer = torch.cat([en_harmful[:n_caa], en_harmless[:n_caa]], dim=0)
+                logger.info(
+                    f"Pre-computed activations: {n_caa} harmful + {n_caa} harmless "
+                    f"(layer {critical_layer})"
+                )
+            else:
+                logger.warning(
+                    f"Activation count mismatch ({len(en_acts_flat)} vs "
+                    f"{len(en_df_all)} dataset rows). Falling through to on-the-fly extraction."
+                )
+
+    if en_layer is None:
+        logger.warning(f"English activations not available: {en_act_path}. Computing on-the-fly...")
         try:
             import torch
             from transformers import AutoModelForCausalLM, AutoTokenizer as AT
@@ -261,10 +287,35 @@ def main():
             subspace = build_subspace_from_probes(str(probes_dir), "en", critical_layer, harm_cats)
             P = subspace["projection_matrix"]
 
+            # Load non-English activations as the LangX source for the alignment map.
+            # Previously both arguments were en_np (English→English), producing an identity map.
+            non_en_langs = [l for l in coherent_langs if l != "en"]
+            langx_parts = []
+            for lang in non_en_langs:
+                lang_act_path = get_activation_path(
+                    args.model, lang, args.perturbation, "last_post_instruction", "residual",
+                    args.activations_dir
+                )
+                if Path(lang_act_path).exists():
+                    lang_acts = load_activations(lang_act_path)
+                    if lang_acts.ndim == 3 and critical_layer < lang_acts.shape[1]:
+                        langx_parts.append(lang_acts[:, critical_layer, :].float())
+                    elif lang_acts.ndim == 2:
+                        langx_parts.append(lang_acts.float())
+
+            en_np = en_layer.cpu().numpy() if hasattr(en_layer, "cpu") else np.array(en_layer)
+            if langx_parts:
+                langx_np = torch.cat(langx_parts, dim=0).cpu().numpy()
+                logger.info(f"Subspace projection: {len(langx_np)} LangX samples from {non_en_langs}")
+            else:
+                logger.warning("No cached non-English activations found; subspace map will be identity.")
+                langx_np = en_np
+
+            n_align = min(len(langx_np), len(en_np))
+
             M_tiers = {}
             for lam in interv_cfg.get("subspace_projection", {}).get("regularization", [0.01]):
-                en_np = en_layer.cpu().numpy() if hasattr(en_layer, "cpu") else np.array(en_layer)
-                M = learn_subspace_map(en_np, en_np, P, regularization=lam)
+                M = learn_subspace_map(langx_np[:n_align], en_np[:n_align], P, regularization=lam)
                 M_tiers[str(lam)] = M
 
             interventions["subspace_projection"] = {

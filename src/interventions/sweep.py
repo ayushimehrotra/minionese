@@ -178,7 +178,7 @@ def run_full_sweep(
 
         model = AutoModelForCausalLM.from_pretrained(
             model_name,
-            dtype=torch.float16,
+            torch_dtype=torch.float16,
             device_map="auto",
         )
         model.eval()

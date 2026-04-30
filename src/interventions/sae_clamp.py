@@ -202,7 +202,8 @@ def apply_sae_clamping(
                     pad_token_id=tokenizer.eos_token_id,
                 )
 
-            decoded = tokenizer.batch_decode(out, skip_special_tokens=True)
+            input_len = enc["input_ids"].shape[1]
+            decoded = tokenizer.batch_decode(out[:, input_len:], skip_special_tokens=True)
             responses.extend(decoded)
 
     finally:

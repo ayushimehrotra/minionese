@@ -342,7 +342,13 @@ def main():
                     try:
                         acts = load_activations(act_path)
                         val = acts[:, crit_layer, :].numpy() if acts.ndim == 3 else acts.numpy()
-                        acts_dict[(lang, "harmful")] = val
+                        lang_df = df[df["language"] == lang].reset_index(drop=True)
+                        if len(lang_df) == len(val):
+                            harm_mask_lang = lang_df["__is_harmful__"].values
+                            acts_dict[(lang, "harmful")] = val[harm_mask_lang]
+                            acts_dict[(lang, "harmless")] = val[~harm_mask_lang]
+                        else:
+                            acts_dict[(lang, "harmful")] = val
                     except Exception as e:
                         logger.debug(f"Error loading {act_path}: {e}")
 

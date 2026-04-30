@@ -53,8 +53,6 @@ def train_probe(
         max_iter=1000,
         scoring="roc_auc",
         n_jobs=-1,
-        l1_ratios=(0.0,),
-        use_legacy_attributes=False,
     )
     clf.fit(X_scaled, y)
 
