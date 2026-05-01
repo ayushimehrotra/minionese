@@ -1,0 +1,11 @@
+intervention,param_value,language,tier,asr,over_refusal,langid_consistency,mmlu_accuracy
+baseline,,all,all,0.825,0.0,0.975,
+caa,0.5,all,all,0.75,0.0,0.95,
+caa,1.0,all,all,0.8,0.0,0.95,
+caa,1.5,all,all,0.9,0.0,0.9,
+caa,2.0,all,all,0.95,0.0,0.85,
+caa,2.5,all,all,0.925,0.0,0.7,
+caa,3.0,all,all,1.0,0.0,0.575,
+subspace_projection,0.001,all,all,0.85,0.0,1.0,
+subspace_projection,0.01,all,all,0.85,0.0,1.0,
+subspace_projection,0.1,all,all,0.85,0.0,1.0,
