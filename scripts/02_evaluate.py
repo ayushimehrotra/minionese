@@ -68,6 +68,13 @@ def ensure_hf_token(args, logger):
     return token
 
 
+def write_jsonl(records, path: Path):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path, "w", encoding="utf-8") as f:
+        for rec in records:
+            f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+
+
 def main():
     args = parse_args()
     setup_logging(level=args.log_level)
@@ -120,6 +127,9 @@ def main():
         hf_token=hf_token,
         use_vllm=args.use_vllm,
     )
+    all_scored_path = output_dir / "all_scored.jsonl"
+    write_jsonl(scored, all_scored_path)
+    logger.info(f"Raw WildGuard labels saved to {all_scored_path}.")
 
     # Compute ASR
     logger.info("Computing ASR...")
@@ -174,11 +184,6 @@ def main():
             logger.info("Figure 2 (ASR heatmap) saved.")
     except Exception as e:
         logger.warning(f"Figure generation failed: {e}")
-
-    # Save all scored results
-    with open(output_dir / "all_scored.jsonl", "w", encoding="utf-8") as f:
-        for r in scored:
-            f.write(json.dumps(r, ensure_ascii=False) + "\n")
 
     logger.info(f"Evaluation complete. Results saved to {output_dir}.")
 

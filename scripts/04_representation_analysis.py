@@ -57,6 +57,12 @@ def parse_args():
     parser.add_argument("--figures-dir", default="figures/")
     parser.add_argument("--perturbation", default="standard_translation")
     parser.add_argument("--token-position", default="last_post_instruction")
+    parser.add_argument("--scored-path", default=None,
+                        help="Optional all_scored.jsonl from script 02. If omitted, "
+                             "searches the matching results*/evaluation directory.")
+    parser.add_argument("--allow-naive-refusal-split", action="store_true",
+                        help="Allow the legacy first-half/second-half fallback when "
+                             "WildGuard labels are missing or unusable.")
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--log-level", default="INFO")
     return parser.parse_args()
@@ -76,6 +82,108 @@ def _select_layer(acts: np.ndarray, layer: int) -> np.ndarray:
     if acts.ndim == 2 and layer == 0:
         return acts
     raise ValueError(f"Cannot select layer {layer} from shape {acts.shape}")
+
+
+def _dedupe_paths(paths):
+    seen = set()
+    out = []
+    for path in paths:
+        key = str(path)
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(path)
+    return out
+
+
+def _as_bool(value) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value.strip().lower() in {"true", "1", "yes"}
+    return bool(value)
+
+
+def _candidate_scored_paths(args) -> list[Path]:
+    if args.scored_path:
+        return [Path(args.scored_path)]
+
+    output_parent = Path(args.output_dir).parent
+    return _dedupe_paths([
+        output_parent / "evaluation" / "all_scored.jsonl",
+        Path(f"results_{args.model}") / "evaluation" / "all_scored.jsonl",
+        Path("results") / "evaluation" / "all_scored.jsonl",
+    ])
+
+
+def _record_model_matches(model_key: str, record_model) -> bool:
+    """Return True when a scored record belongs to the requested model."""
+    if not record_model:
+        return True
+
+    rec = str(record_model).lower()
+    key = str(model_key).lower()
+    if rec == key:
+        return True
+
+    model_markers = {
+        "aya": ("aya", "cohere"),
+        "qwen": ("qwen",),
+        "llama": ("llama",),
+    }
+    return any(marker in rec for marker in model_markers.get(key, (key,)))
+
+
+def _load_en_wildguard_labels(args, logger: logging.Logger) -> dict:
+    """Load English harmful WildGuard labels keyed by prompt_id."""
+    for scored_path in _candidate_scored_paths(args):
+        if not scored_path.exists():
+            continue
+
+        labels = {}
+        with open(scored_path, encoding="utf-8") as f:
+            for line in f:
+                rec = json.loads(line)
+                rec_model = rec.get("model")
+                if not _record_model_matches(args.model, rec_model):
+                    continue
+                if rec.get("language") != "en" or not _as_bool(rec.get("is_harmful")):
+                    continue
+                if rec.get("perturbation") and rec.get("perturbation") != args.perturbation:
+                    continue
+                labels[rec.get("prompt_id", "")] = rec.get("wildguard_label", "safe")
+
+        if labels:
+            logger.info(f"Loaded {len(labels)} English WildGuard labels from {scored_path}.")
+            return labels
+
+        logger.warning(f"Found {scored_path}, but no matching English harmful labels for {args.model}.")
+
+    logger.warning(
+        "No WildGuard all_scored.jsonl found. Checked: "
+        + ", ".join(str(p) for p in _candidate_scored_paths(args))
+    )
+    return {}
+
+
+def _fallback_or_raise_naive_split(
+    en_layer_acts: np.ndarray,
+    args,
+    logger: logging.Logger,
+    reason: str,
+) -> tuple[np.ndarray, np.ndarray]:
+    msg = (
+        f"{reason} Refusal direction needs WildGuard labels; refusing to use "
+        "the naive first-half/second-half split by default. Re-run script 02 "
+        "to produce all_scored.jsonl, pass --scored-path, or explicitly pass "
+        "--allow-naive-refusal-split if you want the legacy fallback."
+    )
+    if not args.allow_naive_refusal_split:
+        raise RuntimeError(msg)
+
+    logger.warning(f"{reason} Using legacy naive split because --allow-naive-refusal-split was set.")
+    n = len(en_layer_acts)
+    return en_layer_acts[:n // 2], en_layer_acts[n // 2:]
 
 
 def main():
@@ -275,14 +383,7 @@ def main():
             en_layer_acts = en_acts_all
 
         # Load WildGuard labels for English harmful prompts (better than naive split)
-        scored_path = Path("results/evaluation/all_scored.jsonl")
-        en_harmful_labels = {}
-        if scored_path.exists():
-            with open(scored_path) as f:
-                for line in f:
-                    rec = json.loads(line)
-                    if rec.get("language") == "en" and rec.get("is_harmful"):
-                        en_harmful_labels[rec.get("prompt_id", "")] = rec.get("wildguard_label", "safe")
+        en_harmful_labels = _load_en_wildguard_labels(args, logger)
 
         # Align labels to activation row order using prompt_ids from dataset
         en_df = df[(df["language"] == "en") & (df["__is_harmful__"])].reset_index(drop=True)
@@ -291,28 +392,43 @@ def main():
                 f"harmful_{i:04d}_en_{args.perturbation}"
                 for i in range(len(en_df))
             ]
-            refused_mask = np.array([
-                en_harmful_labels.get(pid, "safe") in ("safe", "refusal")
-                for pid in en_prompt_ids
-            ])
-            complied_mask = ~refused_mask
-            if refused_mask.sum() >= 5 and complied_mask.sum() >= 5:
-                refused_acts = en_layer_acts[refused_mask]
-                complied_acts = en_layer_acts[complied_mask]
-                logger.info(f"Refusal direction: {refused_mask.sum()} refused, {complied_mask.sum()} complied.")
-            else:
-                logger.warning(
-                    f"Insufficient behavioral contrast: {refused_mask.sum()} refused, "
-                    f"{complied_mask.sum()} complied. Falling back to naive split."
+            missing_prompt_ids = [pid for pid in en_prompt_ids if pid not in en_harmful_labels]
+            if missing_prompt_ids:
+                refused_acts, complied_acts = _fallback_or_raise_naive_split(
+                    en_layer_acts, args, logger,
+                    f"Missing WildGuard labels for {len(missing_prompt_ids)}/{len(en_prompt_ids)} "
+                    "English harmful prompts."
                 )
-                n = len(en_layer_acts)
-                refused_acts = en_layer_acts[:n // 2]
-                complied_acts = en_layer_acts[n // 2:]
+            else:
+                refused_mask = np.array([
+                    en_harmful_labels[pid] in ("safe", "refusal")
+                    for pid in en_prompt_ids
+                ])
+                complied_mask = ~refused_mask
+                if refused_mask.sum() >= 5 and complied_mask.sum() >= 5:
+                    refused_acts = en_layer_acts[refused_mask]
+                    complied_acts = en_layer_acts[complied_mask]
+                    logger.info(
+                        f"Refusal direction: {refused_mask.sum()} refused, "
+                        f"{complied_mask.sum()} complied."
+                    )
+                else:
+                    refused_acts, complied_acts = _fallback_or_raise_naive_split(
+                        en_layer_acts, args, logger,
+                        f"Insufficient behavioral contrast: {refused_mask.sum()} refused, "
+                        f"{complied_mask.sum()} complied."
+                    )
         else:
-            logger.warning("No WildGuard labels found. Using naive split for refusal direction.")
-            n = len(en_layer_acts)
-            refused_acts = en_layer_acts[:n // 2]
-            complied_acts = en_layer_acts[n // 2:]
+            if en_harmful_labels:
+                reason = (
+                    f"WildGuard label/activation count mismatch: labels={len(en_harmful_labels)}, "
+                    f"dataset={len(en_df)}, activations={len(en_layer_acts)}."
+                )
+            else:
+                reason = "No WildGuard labels found."
+            refused_acts, complied_acts = _fallback_or_raise_naive_split(
+                en_layer_acts, args, logger, reason
+            )
 
         refusal_direction = extract_refusal_direction(args.model, refused_acts, complied_acts)
         np.save(str(output_dir / f"refusal_direction_{args.model}.npy"), refusal_direction)
