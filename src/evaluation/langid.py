@@ -10,6 +10,14 @@ import re
 from typing import Dict, List, Tuple
 
 logger = logging.getLogger(__name__)
+_LANGID_WARNED = set()
+
+
+def _warn_once(key: str, message: str) -> None:
+    if key in _LANGID_WARNED:
+        return
+    _LANGID_WARNED.add(key)
+    logger.warning(message)
 
 
 def _sanitize_text_for_langid(text: str) -> str:
@@ -44,11 +52,22 @@ def detect_language(text: str) -> Tuple[str, float]:
         result = detect(cleaned, low_memory=False)
         return result["lang"], result["score"]
     except ImportError:
-        logger.warning("ftlangdetect not available. Returning 'unknown'.")
-        return "unknown", 0.0
+        _warn_once("missing_ftlangdetect", "ftlangdetect not available; trying langdetect fallback.")
     except Exception as e:
-        logger.warning(f"Language detection failed: {e}")
-        return "unknown", 0.0
+        _warn_once("ftlangdetect_failed", f"ftlangdetect failed; trying langdetect fallback. Error: {e}")
+
+    try:
+        from langdetect import detect_langs
+        langs = detect_langs(cleaned)
+        if not langs:
+            return "unknown", 0.0
+        top = langs[0]
+        return top.lang, float(top.prob)
+    except ImportError:
+        _warn_once("missing_langdetect", "langdetect fallback not available. Returning 'unknown'.")
+    except Exception as e:
+        _warn_once("langdetect_failed", f"Language detection fallback failed: {e}")
+    return "unknown", 0.0
 
 
 def compute_langid_consistency(

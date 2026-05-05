@@ -35,14 +35,40 @@ from src.utils.logging_setup import setup_logging
 from src.utils.reproducibility import setup_reproducibility
 
 
-AVAILABLE_SAE_LAYERS = [23, 29]
+AVAILABLE_SAE_LAYERS_BY_MODEL = {
+    "llama": [23, 29],
+    "qwen": [3, 7, 11, 15, 19, 23, 27],
+}
 
 
-def choose_sae_layer(critical_layers):
+def choose_sae_layer(critical_layers, model_key):
+    available = AVAILABLE_SAE_LAYERS_BY_MODEL.get(model_key, [23])
     if not critical_layers:
-        return 23
-    best = min(AVAILABLE_SAE_LAYERS, key=lambda sl: min(abs(sl - cl) for cl in critical_layers))
+        return available[0]
+    best = min(available, key=lambda sl: min(abs(sl - cl) for cl in critical_layers))
     return best
+
+
+def _activation_cache_component(hook_component: str) -> str:
+    comp = (hook_component or "").lower().strip()
+    if comp in {"mlp", "mlp_out"}:
+        return "mlp_out"
+    if comp in {"attn", "attn_out"}:
+        return "attn_out"
+    if comp in {"resid", "residual", "resid_post", "hidden", "hidden_state"}:
+        return "residual"
+    raise ValueError(f"Unsupported SAE hook component: {hook_component}")
+
+
+def _result_hookpoint(model_key: str, layer: int, hook_component: str) -> str:
+    comp = (hook_component or "").lower().strip()
+    if model_key == "qwen" and comp in {"resid", "residual", "resid_post", "hidden", "hidden_state"}:
+        return f"resid_post_layer_{layer}"
+    if comp in {"mlp", "mlp_out"}:
+        return f"layers.{layer}.mlp"
+    if comp in {"attn", "attn_out"}:
+        return f"layers.{layer}.attn"
+    return f"layers.{layer}.residual"
 
 
 def parse_args():
@@ -107,14 +133,15 @@ def main():
 
     from src.activations.cache import load_activations, get_activation_path
 
-    primary_layer = choose_sae_layer(critical_layers)
+    primary_layer = choose_sae_layer(critical_layers, args.model)
     logger.info(f"Primary SAE layer: {primary_layer}")
     activation_component = model_cfg.get("sae_hook_component", "mlp") or "mlp"
+    activation_cache_component = _activation_cache_component(activation_component)
 
     def _load_layer(model_key, lang, layer):
         path = get_activation_path(
             model_key, lang, args.perturbation, args.token_position,
-            f"{activation_component}_out", args.activations_dir
+            activation_cache_component, args.activations_dir
         )
         if not Path(path).exists():
             logger.error(f"{lang} activations not found: {path}")
@@ -177,7 +204,7 @@ def main():
             "comparison_language": lang,
             "critical_layers_sorted": [int(x) for x in critical_layers],
             "sae_repo": model_cfg.get("sae_repo", ""),
-            "hookpoint": f"layers.{primary_layer}.{activation_component}",
+            "hookpoint": _result_hookpoint(args.model, primary_layer, activation_component),
             "activation_component": activation_component,
         }, f, indent=2)
 

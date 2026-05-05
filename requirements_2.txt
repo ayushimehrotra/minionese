@@ -8,4 +8,5 @@ vllm
 nnsight
 scikit-learn
 eai-sparsify
+dictionary-learning
 fasttext-langdetect

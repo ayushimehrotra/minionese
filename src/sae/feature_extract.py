@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import logging
 import os
+from pathlib import Path
 from typing import Any, Optional
 
 import torch
@@ -50,10 +51,77 @@ def _get_hookpoint(layer: int, hook_component: str = "mlp") -> str:
     raise ValueError(f"Unsupported hook_component: {hook_component}")
 
 
+def _get_qwen_hookpoint(layer: int, hook_component: str = "residual") -> str:
+    comp = hook_component.lower().strip()
+    if comp not in {"resid", "residual", "resid_post", "hidden", "hidden_state"}:
+        raise ValueError(
+            "The configured Qwen SAE suite is residual-stream only. "
+            f"Got hook_component={hook_component!r}; use 'residual'."
+        )
+    available_layers = [3, 7, 11, 15, 19, 23, 27]
+    if layer not in available_layers:
+        nearest = min(available_layers, key=lambda x: abs(x - layer))
+        logger.warning(
+            "Qwen SAE layer %s is unavailable; using nearest available layer %s.",
+            layer,
+            nearest,
+        )
+        layer = nearest
+    return f"resid_post_layer_{layer}"
+
+
 def _to_device_dtype(x: torch.Tensor) -> torch.Tensor:
     if not isinstance(x, torch.Tensor):
         x = torch.as_tensor(x)
     return x.to(dtype=torch.float32)
+
+
+def _load_qwen_dictionary_sae(layer: int, hook_component: str) -> Any:
+    repo_id = "andyrdt/saes-qwen2.5-7b-instruct"
+    hookpoint = _get_qwen_hookpoint(layer, hook_component=hook_component)
+    trainer = os.environ.get("QWEN_SAE_TRAINER", "1")
+    if not trainer.startswith("trainer_"):
+        trainer = f"trainer_{trainer}"
+    subdir = f"{hookpoint}/{trainer}"
+
+    try:
+        from huggingface_hub import snapshot_download
+    except ImportError as e:
+        raise RuntimeError(
+            "Missing huggingface_hub, needed to download Qwen SAEs."
+        ) from e
+
+    try:
+        from dictionary_learning import utils as dictionary_utils
+    except ImportError as e:
+        raise RuntimeError(
+            "Qwen SAEs are stored in dictionary_learning format. Install it with:\n"
+            "pip install dictionary-learning\n"
+            "Then rerun script 06. The existing eai-sparsify loader only works "
+            "for the configured Llama SAE."
+        ) from e
+
+    kwargs = {}
+    token = _hf_token()
+    if token:
+        kwargs["token"] = token
+
+    logger.info(
+        "Loading Qwen dictionary SAE from repo=%s subdir=%s",
+        repo_id,
+        subdir,
+    )
+    local_root = snapshot_download(
+        repo_id,
+        allow_patterns=[f"{subdir}/ae.pt", f"{subdir}/config.json", f"{subdir}/eval_results.json"],
+        **kwargs,
+    )
+    sae_dir = Path(local_root) / subdir
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    sae, _config = dictionary_utils.load_dictionary(str(sae_dir), device=device)
+    if hasattr(sae, "eval"):
+        sae.eval()
+    return sae
 
 
 def load_sae(model_name: str, layer: int, hook_component: str = "mlp") -> Any:
@@ -71,6 +139,9 @@ def load_sae(model_name: str, layer: int, hook_component: str = "mlp") -> Any:
         layer,
         hook_component,
     )
+
+    if norm_model == "qwen2.5-7b":
+        return _load_qwen_dictionary_sae(layer, hook_component=hook_component)
 
     if "llama-3.1-8b" not in norm_model and norm_model != "llama":
         logger.warning(

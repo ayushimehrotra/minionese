@@ -18,7 +18,7 @@ target_models:
     critical_layer_range: [9, 19]
     has_sae: true
     sae_repo: "andyrdt/saes-qwen2.5-7b-instruct"
-    sae_hook_component: "mlp"
+    sae_hook_component: "residual"
     coherent_tiers: ["tier1", "tier2"]
 
   aya:

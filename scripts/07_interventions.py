@@ -60,6 +60,12 @@ def parse_args():
     parser.add_argument("--representation-dir", default=None,
                         help="Dir with refusal_direction_{model}.npy. "
                              "Defaults to results/representation/{model}/.")
+    parser.add_argument("--critical-layers", default=None,
+                        help="Optional critical_layers.json from script 05. If omitted, "
+                             "searches next to --output-dir, then results_{model}/, then results/.")
+    parser.add_argument("--coherence-path", default=None,
+                        help="Optional coherence_table.csv from script 02. If omitted, "
+                             "searches next to --output-dir, then results_{model}/, then results/.")
     parser.add_argument("--perturbation", default="standard_translation")
     parser.add_argument("--hf-token", default=None)
     parser.add_argument("--dry-run", action="store_true")
@@ -78,6 +84,47 @@ def resolve_hf_token(cli_token):
         os.environ["HF_TOKEN"] = token
         os.environ["HUGGINGFACE_HUB_TOKEN"] = token
     return token
+
+
+def _dedupe_paths(paths):
+    seen = set()
+    out = []
+    for path in paths:
+        key = str(path)
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(path)
+    return out
+
+
+def _results_root_from_output_dir(output_dir: str) -> Path:
+    p = Path(output_dir)
+    if p.name == "interventions":
+        return p.parent
+    return p.parent if p.parent != Path("") else Path("results")
+
+
+def _candidate_coherence_paths(args):
+    if args.coherence_path:
+        return [Path(args.coherence_path)]
+    root = _results_root_from_output_dir(args.output_dir)
+    return _dedupe_paths([
+        root / "evaluation" / "coherence_table.csv",
+        Path(f"results_{args.model}") / "evaluation" / "coherence_table.csv",
+        Path("results") / "evaluation" / "coherence_table.csv",
+    ])
+
+
+def _candidate_critical_layer_paths(args):
+    if args.critical_layers:
+        return [Path(args.critical_layers)]
+    root = _results_root_from_output_dir(args.output_dir)
+    return _dedupe_paths([
+        root / "attribution" / "critical_layers.json",
+        Path(f"results_{args.model}") / "attribution" / "critical_layers.json",
+        Path("results") / "attribution" / "critical_layers.json",
+    ])
 
 
 def main():
@@ -110,7 +157,10 @@ def main():
 
     # Coherence filtering: only intervene on languages where model generates coherently
     all_test_langs = test_df["language"].unique().tolist()
-    coherent_langs = filter_languages(all_test_langs, args.model)
+    coherence_candidates = _candidate_coherence_paths(args)
+    coherence_path = next((p for p in coherence_candidates if p.exists()), coherence_candidates[0])
+    logger.info(f"Coherence filter path: {coherence_path}")
+    coherent_langs = filter_languages(all_test_langs, args.model, coherence_path=str(coherence_path))
     test_df = test_df[test_df["language"].isin(coherent_langs)].reset_index(drop=True)
     logger.info(
         f"Intervention evaluation on {len(coherent_langs)} coherent languages "
@@ -125,8 +175,10 @@ def main():
         return
 
     # Determine critical layer
-    critical_layers_path = Path("results/attribution/critical_layers.json")
-    if critical_layers_path.exists():
+    critical_candidates = _candidate_critical_layer_paths(args)
+    critical_layers_path = next((p for p in critical_candidates if p.exists()), None)
+    if critical_layers_path is not None and critical_layers_path.exists():
+        logger.info(f"Loading critical layers from {critical_layers_path}")
         with open(critical_layers_path) as f:
             critical_data = json.load(f)
         critical_layers = critical_data.get("critical_layers", [15])
@@ -181,7 +233,6 @@ def main():
     if en_layer is None:
         logger.warning(f"English activations not available: {en_act_path}. Computing on-the-fly...")
         try:
-            import torch
             from transformers import AutoModelForCausalLM, AutoTokenizer as AT
 
             en_train_df = load_dataset(dataset_dir=args.dataset_dir, perturbations=[args.perturbation])
