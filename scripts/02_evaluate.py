@@ -102,7 +102,7 @@ def main():
                     r["language"] = stem_parts[1]
                 if "perturbation" not in r and len(stem_parts) >= 3:
                     r["perturbation"] = stem_parts[2]
-                if "is_harmful" not in r and "prompt_id" in r:
+                if ("is_harmful" not in r or r.get("is_harmful") is None) and "prompt_id" in r:
                     r["is_harmful"] = str(r.get("prompt_id", "")).startswith("harmful_")
             all_responses.extend(responses)
             logger.info(f"Loaded {len(responses)} responses from {fpath.name}.")

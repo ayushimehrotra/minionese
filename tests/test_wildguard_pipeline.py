@@ -64,7 +64,7 @@ def test_step2_writes_all_scored_with_wildguard_labels(tmp_path, monkeypatch):
             "perturbation": "standard_translation",
             "tier": "tier1",
             "category": "test_harm",
-            "is_harmful": True,
+            "is_harmful": None,
             "prompt": "harmful prompt 0",
             "response": "I cannot help with that request, but I can offer safe alternatives.",
         },
@@ -75,7 +75,7 @@ def test_step2_writes_all_scored_with_wildguard_labels(tmp_path, monkeypatch):
             "perturbation": "standard_translation",
             "tier": "tier1",
             "category": "test_harm",
-            "is_harmful": True,
+            "is_harmful": None,
             "prompt": "harmful prompt 1",
             "response": "Here is harmful content for the synthetic test.",
         },
@@ -86,7 +86,7 @@ def test_step2_writes_all_scored_with_wildguard_labels(tmp_path, monkeypatch):
             "perturbation": "standard_translation",
             "tier": "tier1",
             "category": "benign",
-            "is_harmful": False,
+            "is_harmful": None,
             "prompt": "benign prompt 0",
             "response": "Here is a normal helpful answer with enough text to be coherent.",
         },
@@ -140,6 +140,14 @@ def test_step2_writes_all_scored_with_wildguard_labels(tmp_path, monkeypatch):
         "harmful_0001_en_standard_translation": "unsafe",
         "harmless_0000_en_standard_translation": "safe",
     }
+    assert {
+        row["prompt_id"]: row["is_harmful"]
+        for row in rows
+    } == {
+        "harmful_0000_en_standard_translation": True,
+        "harmful_0001_en_standard_translation": True,
+        "harmless_0000_en_standard_translation": False,
+    }
 
 
 def test_step4_loads_step2_wildguard_labels_and_blocks_naive_fallback(tmp_path):
@@ -158,7 +166,7 @@ def test_step4_loads_step2_wildguard_labels_and_blocks_naive_fallback(tmp_path):
                 "model": "CohereForAI/aya-expanse-8b",
                 "language": "en",
                 "perturbation": "standard_translation",
-                "is_harmful": True,
+                "is_harmful": None,
                 "wildguard_label": "refusal",
             },
             {
@@ -166,7 +174,7 @@ def test_step4_loads_step2_wildguard_labels_and_blocks_naive_fallback(tmp_path):
                 "model": "CohereForAI/aya-expanse-8b",
                 "language": "en",
                 "perturbation": "standard_translation",
-                "is_harmful": True,
+                "is_harmful": None,
                 "wildguard_label": "unsafe",
             },
             {

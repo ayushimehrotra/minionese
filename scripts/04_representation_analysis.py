@@ -147,7 +147,10 @@ def _load_en_wildguard_labels(args, logger: logging.Logger) -> dict:
                 rec_model = rec.get("model")
                 if not _record_model_matches(args.model, rec_model):
                     continue
-                if rec.get("language") != "en" or not _as_bool(rec.get("is_harmful")):
+                is_harmful = rec.get("is_harmful")
+                if is_harmful is None:
+                    is_harmful = str(rec.get("prompt_id", "")).startswith("harmful_")
+                if rec.get("language") != "en" or not _as_bool(is_harmful):
                     continue
                 if rec.get("perturbation") and rec.get("perturbation") != args.perturbation:
                     continue
